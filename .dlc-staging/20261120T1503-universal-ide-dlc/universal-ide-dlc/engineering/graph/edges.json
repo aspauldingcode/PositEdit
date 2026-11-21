@@ -1,0 +1,467 @@
+[
+  {
+    "from": "D00",
+    "to": "D01",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D00",
+    "to": "D02",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D00",
+    "to": "D03",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D00",
+    "to": "D04",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D03",
+    "to": "D05",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D04",
+    "to": "D05",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D02",
+    "to": "D06",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D04",
+    "to": "D06",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D00",
+    "to": "D07",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D02",
+    "to": "D07",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D08",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D09",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D08",
+    "to": "D10",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D09",
+    "to": "D10",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D11",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D12",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D13",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D14",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D07",
+    "to": "D15",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D05",
+    "to": "D16",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D06",
+    "to": "D16",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D11",
+    "to": "D17",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D16",
+    "to": "D17",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D09",
+    "to": "D18",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D16",
+    "to": "D18",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D08",
+    "to": "D19",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D16",
+    "to": "D19",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D14",
+    "to": "D20",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D16",
+    "to": "D20",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D12",
+    "to": "D21",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D13",
+    "to": "D21",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D15",
+    "to": "D21",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D16",
+    "to": "D21",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D06",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D08",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D09",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D11",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D12",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D13",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D14",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D15",
+    "to": "D22",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D05",
+    "to": "D23",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D23",
+    "to": "D24",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D24",
+    "to": "D25",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D15",
+    "to": "D25",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D23",
+    "to": "D26",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D14",
+    "to": "D26",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D26",
+    "to": "D27",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D14",
+    "to": "D28",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D06",
+    "to": "D28",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D28",
+    "to": "D29",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D27",
+    "to": "D29",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D08",
+    "to": "D30",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D06",
+    "to": "D30",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D30",
+    "to": "D31",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D30",
+    "to": "D32",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D23",
+    "to": "D33",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D31",
+    "to": "D33",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D32",
+    "to": "D33",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D23",
+    "to": "D34",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D30",
+    "to": "D34",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D22",
+    "to": "D35",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D33",
+    "to": "D35",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D26",
+    "to": "D35",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D22",
+    "to": "D36",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D25",
+    "to": "D36",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D26",
+    "to": "D36",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D33",
+    "to": "D36",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D17",
+    "to": "D37",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D18",
+    "to": "D37",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D19",
+    "to": "D37",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D20",
+    "to": "D37",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D21",
+    "to": "D37",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D24",
+    "to": "D38",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D26",
+    "to": "D38",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D27",
+    "to": "D38",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D33",
+    "to": "D38",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D34",
+    "to": "D38",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D22",
+    "to": "D39",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D29",
+    "to": "D39",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D38",
+    "to": "D39",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D00",
+    "to": "D40",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D37",
+    "to": "D41",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D38",
+    "to": "D41",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D40",
+    "to": "D41",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D39",
+    "to": "D42",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D35",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D36",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D37",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D38",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D39",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D41",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  },
+  {
+    "from": "D42",
+    "to": "D43",
+    "kind": "DEPENDS_ON"
+  }
+]

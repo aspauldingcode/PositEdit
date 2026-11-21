@@ -1,0 +1,9 @@
+[package]
+name = "ide-dap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ide-protocol = { path = "../ide-protocol" }
+serde_json.workspace = true

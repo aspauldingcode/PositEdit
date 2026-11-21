@@ -1,0 +1,154 @@
+[
+  {
+    "title": "Bend 2 official source",
+    "url": "https://github.com/bendlang/bend"
+  },
+  {
+    "title": "Bend 2 official language guide",
+    "url": "https://github.com/bendlang/bend/blob/main/guide/GUIDE.md"
+  },
+  {
+    "title": "Bend 2 homepage",
+    "url": "https://bend-lang.com/"
+  },
+  {
+    "title": "Bend proof workflow checked example",
+    "url": "https://bend2.dev/learn/types-as-specifications/"
+  },
+  {
+    "title": "Bend AI agent guide",
+    "url": "https://bend2.dev/notes/ai-agents-bend/"
+  },
+  {
+    "title": "Model Context Protocol specification",
+    "url": "https://modelcontextprotocol.io/specification"
+  },
+  {
+    "title": "Official Rust MCP SDK",
+    "url": "https://github.com/modelcontextprotocol/rust-sdk"
+  },
+  {
+    "title": "MCP sample servers",
+    "url": "https://github.com/modelcontextprotocol/servers"
+  },
+  {
+    "title": "Filesystem MCP server",
+    "url": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+  },
+  {
+    "title": "Cursor CLI",
+    "url": "https://cursor.com/docs/cli/overview"
+  },
+  {
+    "title": "Cursor headless CLI",
+    "url": "https://cursor.com/docs/cli/using"
+  },
+  {
+    "title": "Cursor MCP configuration",
+    "url": "https://cursor.com/guides/coding-agent-mcp"
+  },
+  {
+    "title": "Codex CLI noninteractive",
+    "url": "https://learn.chatgpt.com/docs/non-interactive-mode"
+  },
+  {
+    "title": "Claude Code CLI reference",
+    "url": "https://code.claude.com/docs/en/cli-usage"
+  },
+  {
+    "title": "Apple Xcode CLT",
+    "url": "https://developer.apple.com/documentation/xcode/installing-the-command-line-tools"
+  },
+  {
+    "title": "Nix Flakes",
+    "url": "https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake.html"
+  },
+  {
+    "title": "Nix Rust packaging",
+    "url": "https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md"
+  },
+  {
+    "title": "Rust language",
+    "url": "https://www.rust-lang.org/"
+  },
+  {
+    "title": "Cargo workspaces",
+    "url": "https://doc.rust-lang.org/cargo/reference/workspaces.html"
+  },
+  {
+    "title": "Ratatui",
+    "url": "https://ratatui.rs/"
+  },
+  {
+    "title": "Crossterm",
+    "url": "https://docs.rs/crossterm/"
+  },
+  {
+    "title": "Ropey",
+    "url": "https://docs.rs/ropey/"
+  },
+  {
+    "title": "Tokio",
+    "url": "https://tokio.rs/"
+  },
+  {
+    "title": "Tree-sitter",
+    "url": "https://tree-sitter.github.io/tree-sitter/"
+  },
+  {
+    "title": "Language Server Protocol",
+    "url": "https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/"
+  },
+  {
+    "title": "Debug Adapter Protocol",
+    "url": "https://microsoft.github.io/debug-adapter-protocol/specification"
+  },
+  {
+    "title": "LSP types Rust",
+    "url": "https://docs.rs/lsp-types/"
+  },
+  {
+    "title": "gitoxide",
+    "url": "https://github.com/GitoxideLabs/gitoxide"
+  },
+  {
+    "title": "Nucleo",
+    "url": "https://github.com/helix-editor/nucleo"
+  },
+  {
+    "title": "tmux",
+    "url": "https://github.com/tmux/tmux/wiki"
+  },
+  {
+    "title": "Swift SourceKit-LSP",
+    "url": "https://github.com/swiftlang/sourcekit-lsp"
+  },
+  {
+    "title": "Rust analyzer",
+    "url": "https://rust-analyzer.github.io/"
+  },
+  {
+    "title": "clangd",
+    "url": "https://clangd.llvm.org/"
+  },
+  {
+    "title": "ZLS",
+    "url": "https://github.com/zigtools/zls"
+  },
+  {
+    "title": "Nixd",
+    "url": "https://github.com/nix-community/nixd"
+  },
+  {
+    "title": "debugpy",
+    "url": "https://github.com/microsoft/debugpy"
+  },
+  {
+    "title": "CodeLLDB",
+    "url": "https://github.com/vadimcn/codelldb"
+  },
+  {
+    "title": "OpenSSH",
+    "url": "https://www.openssh.com/"
+  }
+]

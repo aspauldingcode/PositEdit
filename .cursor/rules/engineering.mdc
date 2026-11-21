@@ -1,0 +1,5 @@
+---
+description: Posit Edit graph and proof engineering
+alwaysApply: true
+---
+Read AGENTS.md and ONE_SHOT_PROMPT.md. Do not modify accepted LAWS.bend or SPEC.bend. Work inside the repository; preserve evidence; require Bend proof and executable Rust tests. Do not recursively invoke agents from an agent task.

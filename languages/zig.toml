@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "zig"
+extensions = ["zig"]
+server = "zls"
+formatter = "zig fmt"
+build = "zig build"
+test = "zig build test"
+debugger = "lldb"

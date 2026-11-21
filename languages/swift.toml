@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "swift"
+extensions = ["swift"]
+server = "sourcekit-lsp"
+formatter = "swift-format"
+build = "swift build"
+test = "swift test"
+debugger = "lldb"

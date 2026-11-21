@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "java"
+extensions = ["java"]
+server = "jdtls"
+formatter = "google-java-format"
+build = "./gradlew build"
+test = "./gradlew test"
+debugger = "java-debug"

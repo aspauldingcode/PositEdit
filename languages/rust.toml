@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "rust"
+extensions = ["rs"]
+server = "rust-analyzer"
+formatter = "rustfmt"
+build = "cargo"
+test = "cargo test"
+debugger = "codelldb"

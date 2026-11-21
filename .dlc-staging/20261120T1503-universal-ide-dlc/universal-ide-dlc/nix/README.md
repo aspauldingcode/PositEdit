@@ -1,0 +1,1 @@
+The top-level standalone `flake.nix` packages only this DLC. It deliberately does not vendor Apple SDKs, Android emulator images, JetBrains IDEs, terminal-phone, terminal-browser, or the original editor codebase. Optional tools are resolved at runtime.

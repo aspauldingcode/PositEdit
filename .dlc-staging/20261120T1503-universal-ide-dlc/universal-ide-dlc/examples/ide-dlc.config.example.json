@@ -1,0 +1,13 @@
+{
+  "system": "cmake",
+  "build_dir": "build",
+  "build_config": "Debug",
+  "run_artifact": "build/myapp",
+  "browser_url": "http://localhost:5173",
+  "phone_session": "work",
+  "phone_bundle": "com.example.app",
+  "avd": "Pixel_9_Arm64",
+  "android_serial": "emulator-5554",
+  "android_package": "com.example.app",
+  "android_apk": "app/build/outputs/apk/debug/app-debug.apk"
+}

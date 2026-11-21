@@ -1,0 +1,22 @@
+{
+  "project": "Posit Edit",
+  "preferred_agent": "cursor",
+  "max_tasks_per_run": 60,
+  "max_attempts_per_task": 3,
+  "task_timeout_seconds": 1800,
+  "max_agent_output_bytes": 2000000,
+  "max_log_bytes": 2000000,
+  "minimum_expected_proof_verdict": "ALL PROOFS CHECK",
+  "allowed_repository_writes": true,
+  "allow_global_install": true,
+  "allow_sudo": false,
+  "allow_remote_push": true,
+  "allow_paid_api_provisioning": false,
+  "allow_external_publish": true,
+  "allow_bypass_permissions": false,
+  "enforce_bend_verdict_for_proof_tasks": true,
+  "trusted_mcp_root": ".",
+  "enable_optional_mcp": false,
+  "dry_run_by_default": false,
+  "max_run_wall_seconds": 28800
+}

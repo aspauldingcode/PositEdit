@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "kotlin"
+extensions = ["kt", "kts"]
+server = "kotlin-language-server"
+formatter = "ktlint"
+build = "./gradlew build"
+test = "./gradlew test"
+debugger = "jvm-debug"

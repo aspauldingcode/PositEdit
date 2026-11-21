@@ -1,0 +1,18 @@
+{
+  "schema": "universal.ide.dlc.v1",
+  "version": 1,
+  "methods": {
+    "project.scan": {"trust": "passive", "arguments": ["root"], "returns": "Project[]"},
+    "project.inspect": {"trust": "passive", "arguments": ["root", "system"], "returns": "NativeMetadata"},
+    "project.plan": {"trust": "passive", "arguments": ["root", "system", "action", "configuration"], "returns": "ExecutionPlan"},
+    "project.native_sync": {"trust": "execution_allowed", "arguments": ["root", "system", "toolchain"], "returns": "ResolvedModel"},
+    "project.config.preview": {"trust": "read", "arguments": ["root", "native_owner", "change"], "returns": "MutationPreview"},
+    "project.config.apply": {"trust": "write_owner_approved", "arguments": ["mutation_id", "expected_revision"], "returns": "ReimportReceipt"},
+    "runtime.discover": {"trust": "passive", "arguments": ["host"], "returns": "RuntimeCapability[]"},
+    "runtime.prepare": {"trust": "execution_allowed", "arguments": ["target", "destination"], "returns": "RuntimeSession"},
+    "runtime.input": {"trust": "owner_authorized", "arguments": ["session", "input", "observation_revision"], "returns": "InputReceipt"}
+  },
+  "execution_plan_fields": ["adapter", "target_id", "configuration_id", "host_platform", "target_platform", "destination_id", "argv", "cwd", "env", "trust", "prerequisites", "expected_outputs", "provenance"],
+  "native_mutation_policy": "reject_unknown_fields; preview; backup; atomic_apply; reimport; semantic_diff; rollback_on_failure",
+  "unimplemented_methods_are_capability_errors": true
+}

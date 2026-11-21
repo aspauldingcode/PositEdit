@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "c"
+extensions = ["c", "h"]
+server = "clangd"
+formatter = "clang-format"
+build = "clang"
+test = "ctest"
+debugger = "lldb"

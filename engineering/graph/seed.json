@@ -1,0 +1,875 @@
+{
+  "schema_version": 1,
+  "nodes": [
+    {
+      "id": "TASK-000",
+      "type": "task",
+      "title": "Environment inventory and local harness smoke tests",
+      "phase": 0,
+      "priority": 100,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "python3 -m unittest discover -s harness/tests",
+        "python3 scripts/harness.py status"
+      ],
+      "file_scope": [
+        "scripts",
+        "engineering",
+        "README.md"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-010",
+      "type": "task",
+      "title": "Reproducible macOS and Nix toolchain bootstrap",
+      "phase": 0,
+      "priority": 95,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "python3 scripts/preflight.py",
+        "python3 scripts/verify.py --level scaffold"
+      ],
+      "file_scope": [
+        "flake.nix",
+        "scripts",
+        "engineering"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-020",
+      "type": "task",
+      "title": "Bend 2 proof gate, formal state models and law coverage",
+      "phase": 1,
+      "priority": 99,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "bend PROOF.bend --verdict"
+      ],
+      "file_scope": [
+        "LAWS.bend",
+        "SPEC.bend",
+        "PROOF.bend",
+        "bend",
+        "tests"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-030",
+      "type": "task",
+      "title": "Rust core transactional buffers and Unicode position map",
+      "phase": 1,
+      "priority": 98,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-core"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-core"
+      ]
+    },
+    {
+      "id": "TASK-040",
+      "type": "task",
+      "title": "TUI input, splits, palettes, rendering and PTY interaction",
+      "phase": 1,
+      "priority": 92,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace",
+        "python3 scripts/tui_smoke.py"
+      ],
+      "file_scope": [
+        "crates/ide-tui",
+        "crates/ide",
+        "tests"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-tui"
+      ]
+    },
+    {
+      "id": "TASK-050",
+      "type": "task",
+      "title": "Language detection, Tree-sitter and unknown fallback",
+      "phase": 2,
+      "priority": 86,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-syntax",
+        "languages"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-syntax"
+      ]
+    },
+    {
+      "id": "TASK-060",
+      "type": "task",
+      "title": "Process supervision, PTY, cancellation, task graph",
+      "phase": 2,
+      "priority": 93,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-process"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-process"
+      ]
+    },
+    {
+      "id": "TASK-070",
+      "type": "task",
+      "title": "LSP protocol, lifecycle, fixture tests and real servers",
+      "phase": 2,
+      "priority": 95,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-lsp",
+        "crates/ide-protocol",
+        "tests"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-lsp"
+      ]
+    },
+    {
+      "id": "TASK-080",
+      "type": "task",
+      "title": "DAP client, mock adapter, LLDB integration and tests",
+      "phase": 3,
+      "priority": 93,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "cargo test --workspace",
+        "bend PROOF.bend --verdict"
+      ],
+      "file_scope": [
+        "crates/ide-dap",
+        "crates/ide-protocol",
+        "tests"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-dap"
+      ]
+    },
+    {
+      "id": "TASK-090",
+      "type": "task",
+      "title": "Fuzzy files, ripgrep and semantic navigation",
+      "phase": 3,
+      "priority": 78,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-navigation"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-navigation"
+      ]
+    },
+    {
+      "id": "TASK-100",
+      "type": "task",
+      "title": "Git status, stage, diff, blame, worktrees and safe UI",
+      "phase": 4,
+      "priority": 76,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-git"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-git"
+      ]
+    },
+    {
+      "id": "TASK-110",
+      "type": "task",
+      "title": "Generic test explorer and coverage adapters",
+      "phase": 4,
+      "priority": 76,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-test"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-test"
+      ]
+    },
+    {
+      "id": "TASK-120",
+      "type": "task",
+      "title": "Profiling UI and sampler adapters",
+      "phase": 4,
+      "priority": 67,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-profile"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-profile"
+      ]
+    },
+    {
+      "id": "TASK-130",
+      "type": "task",
+      "title": "Package-manager UI and Nix/SwiftPM/Cargo adapters",
+      "phase": 4,
+      "priority": 74,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-packages"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-packages"
+      ]
+    },
+    {
+      "id": "TASK-140",
+      "type": "task",
+      "title": "Optional AI providers, MCP, permissions, agent edit auditing",
+      "phase": 5,
+      "priority": 85,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "cargo test --workspace",
+        "bend PROOF.bend --verdict"
+      ],
+      "file_scope": [
+        "crates/ide-ai",
+        "crates/ide-mcp"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-ai",
+        "ide-mcp"
+      ]
+    },
+    {
+      "id": "TASK-150",
+      "type": "task",
+      "title": "Remote development over SSH and secure remote agent",
+      "phase": 5,
+      "priority": 82,
+      "status": "pending",
+      "risk": "medium",
+      "requires_proof": false,
+      "acceptance_commands": [
+        "cargo test --workspace"
+      ],
+      "file_scope": [
+        "crates/ide-remote"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance.",
+      "required_implemented_crates": [
+        "ide-remote"
+      ]
+    },
+    {
+      "id": "TASK-160",
+      "type": "task",
+      "title": "Real 10-language runtime matrix and TUI QA",
+      "phase": 6,
+      "priority": 99,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "python3 scripts/verify.py --level full",
+        "python3 scripts/verify_language_matrix.py"
+      ],
+      "file_scope": [
+        "tests",
+        "engineering/evidence",
+        "languages"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-170",
+      "type": "task",
+      "title": "Security, recovery, fuzzing and performance budgets",
+      "phase": 6,
+      "priority": 97,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "python3 scripts/verify.py --level full"
+      ],
+      "file_scope": [
+        "tests",
+        "benchmarks",
+        "engineering"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-180",
+      "type": "task",
+      "title": "Nix reproducible full release, SBOM, hashes and docs",
+      "phase": 7,
+      "priority": 100,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "python3 scripts/verify.py --level release",
+        "python3 scripts/check_release.py"
+      ],
+      "file_scope": [
+        "flake.nix",
+        "nix",
+        "engineering",
+        "docs"
+      ],
+      "max_attempts": 3,
+      "description": "See ARCHITECTURE.md and engineering/VERIFICATION.md for requirements and acceptance."
+    },
+    {
+      "id": "TASK-200",
+      "type": "task",
+      "title": "Integrate project workbench DLC and trust decision",
+      "phase": 8,
+      "priority": 90,
+      "status": "pending",
+      "risk": "high",
+      "requires_proof": true,
+      "acceptance_commands": [
+        "bend bend/dlc/PROOF.bend --verdict",
+        "cargo test -p ide-tui -p ide-dlc-ui --offline"
+      ],
+      "file_scope": [
+        "crates/ide-dlc-ui",
+        "crates/ide-tui",
+        "extensions/project-dlc",
+        "bend/dlc",
+        "contracts/project"
+      ],
+      "max_attempts": 3,
+      "description": "Toolbar plans stay previews until the workspace is trusted. The Bend authorize decision matches the Rust function."
+    },
+    {
+      "id": "C01",
+      "type": "component",
+      "title": "Text buffer/editing",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C02",
+      "type": "component",
+      "title": "TUI rendering/input",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C03",
+      "type": "component",
+      "title": "Workspace/command engine",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C04",
+      "type": "component",
+      "title": "Syntax detection/fallback",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C05",
+      "type": "component",
+      "title": "LSP client",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C06",
+      "type": "component",
+      "title": "DAP client",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C07",
+      "type": "component",
+      "title": "Task runner",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C08",
+      "type": "component",
+      "title": "File/symbol navigation",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C09",
+      "type": "component",
+      "title": "Git UI",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C10",
+      "type": "component",
+      "title": "Test explorer",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C11",
+      "type": "component",
+      "title": "Profiling",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C12",
+      "type": "component",
+      "title": "AI/MCP",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C13",
+      "type": "component",
+      "title": "Remote development",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "C14",
+      "type": "component",
+      "title": "Package management",
+      "status": "planned",
+      "description": "Full scope described in ARCHITECTURE.md"
+    },
+    {
+      "id": "LAW-001",
+      "type": "law",
+      "title": "Atomic edits",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-002",
+      "type": "law",
+      "title": "Revision advances",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-003",
+      "type": "law",
+      "title": "Rejected edits unchanged",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-004",
+      "type": "law",
+      "title": "Cancellation of running job",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-005",
+      "type": "law",
+      "title": "Cancellation idempotent",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-006",
+      "type": "law",
+      "title": "Terminal restore",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-007",
+      "type": "law",
+      "title": "No capability bluffing",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-008",
+      "type": "law",
+      "title": "No secret exfiltration",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-009",
+      "type": "law",
+      "title": "Immutable laws",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    },
+    {
+      "id": "LAW-010",
+      "type": "law",
+      "title": "Proof gate and Rust conformance",
+      "status": "accepted",
+      "description": "See laws.md. Formal scope varies; not all prose laws can be proved by Bend."
+    }
+  ],
+  "edges": [
+    {
+      "source": "TASK-010",
+      "target": "TASK-000",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-020",
+      "target": "TASK-000",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-030",
+      "target": "TASK-010",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-030",
+      "target": "TASK-020",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-040",
+      "target": "TASK-030",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-050",
+      "target": "TASK-030",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-060",
+      "target": "TASK-030",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-070",
+      "target": "TASK-050",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-070",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-080",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-080",
+      "target": "TASK-020",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-090",
+      "target": "TASK-070",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-100",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-100",
+      "target": "TASK-040",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-110",
+      "target": "TASK-080",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-110",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-120",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-120",
+      "target": "TASK-040",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-130",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-130",
+      "target": "TASK-040",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-140",
+      "target": "TASK-070",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-140",
+      "target": "TASK-020",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-140",
+      "target": "TASK-060",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-150",
+      "target": "TASK-070",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-150",
+      "target": "TASK-080",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-040",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-050",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-070",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-080",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-090",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-100",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-110",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-120",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-130",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-140",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-160",
+      "target": "TASK-150",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-170",
+      "target": "TASK-160",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-180",
+      "target": "TASK-170",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "TASK-030",
+      "target": "C01",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-040",
+      "target": "C02",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-030",
+      "target": "C03",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-050",
+      "target": "C04",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-070",
+      "target": "C05",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-080",
+      "target": "C06",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-060",
+      "target": "C07",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-090",
+      "target": "C08",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-100",
+      "target": "C09",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-110",
+      "target": "C10",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-120",
+      "target": "C11",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-140",
+      "target": "C12",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-150",
+      "target": "C13",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-130",
+      "target": "C14",
+      "type": "IMPLEMENTS"
+    },
+    {
+      "source": "TASK-200",
+      "target": "TASK-180",
+      "type": "DEPENDS_ON"
+    }
+  ]
+}

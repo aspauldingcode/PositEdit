@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "nix"
+extensions = ["nix"]
+server = "nixd"
+formatter = "nixfmt"
+build = "nix build"
+test = "nix flake check"
+debugger = "none"

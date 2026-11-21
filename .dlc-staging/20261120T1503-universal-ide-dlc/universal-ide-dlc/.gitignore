@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+result
+result-*
+.DS_Store
+.ide-dlc.json
+*.log

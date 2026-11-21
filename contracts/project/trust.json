@@ -1,0 +1,15 @@
+{
+  "schema": "axiom.project.trust.v1",
+  "version": 1,
+  "component": "project-plan-trust",
+  "states": ["Untrusted", "Trusted"],
+  "results": ["Preview", "Execute"],
+  "transitions": [
+    {"from": "Untrusted", "result": "Preview"},
+    {"from": "Trusted", "result": "Execute"}
+  ],
+  "rule": "A reviewed plan may be executed only after the workspace is explicitly trusted. Otherwise the IDE shows the plan and does not start it.",
+  "rust": "crates/ide-dlc-ui/src/lib.rs authorize",
+  "bend": "bend/dlc/state.bend authorize",
+  "identifiers": "enum names, not pointers"
+}

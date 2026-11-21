@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "typescript"
+extensions = ["ts", "tsx"]
+server = "typescript-language-server --stdio"
+formatter = "prettier"
+build = "bun run build"
+test = "bun test"
+debugger = "js-debug"

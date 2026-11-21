@@ -1,0 +1,490 @@
+[
+  {
+    "id": "D00",
+    "kind": "engineering_task",
+    "title": "DLC contract and trust model",
+    "depends_on": [],
+    "status": "passive-prototype",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D01",
+    "kind": "engineering_task",
+    "title": "Project detection across mixed repos",
+    "depends_on": [
+      "D00"
+    ],
+    "status": "passive-prototype",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D02",
+    "kind": "engineering_task",
+    "title": "Native model graph with stable identities",
+    "depends_on": [
+      "D00"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D03",
+    "kind": "engineering_task",
+    "title": "UI toolbar Build Run Configure Test",
+    "depends_on": [
+      "D00"
+    ],
+    "status": "passive-prototype",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D04",
+    "kind": "engineering_task",
+    "title": "IDE-owned launch config persistence",
+    "depends_on": [
+      "D00"
+    ],
+    "status": "passive-prototype",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D05",
+    "kind": "engineering_task",
+    "title": "Host Rust event-loop wiring and async command dispatch",
+    "depends_on": [
+      "D03",
+      "D04"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D06",
+    "kind": "engineering_task",
+    "title": "Native execution planner ABI/platform checking",
+    "depends_on": [
+      "D02",
+      "D04"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D07",
+    "kind": "engineering_task",
+    "title": "Trusted native introspection infrastructure",
+    "depends_on": [
+      "D00",
+      "D02"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D08",
+    "kind": "engineering_task",
+    "title": "Gradle Tooling API bridge including Android variants",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D09",
+    "kind": "engineering_task",
+    "title": "Maven effective POM and profile resolver",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D10",
+    "kind": "engineering_task",
+    "title": "IntelliJ metadata, facets, run configs and JPS fallback",
+    "depends_on": [
+      "D08",
+      "D09"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D11",
+    "kind": "engineering_task",
+    "title": "CMake File API target graph and presets resolver",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D12",
+    "kind": "engineering_task",
+    "title": "Meson introspection full graph and native options",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D13",
+    "kind": "engineering_task",
+    "title": "Nix flakes multi-system outputs and derivation resolver",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D14",
+    "kind": "engineering_task",
+    "title": "Xcode JSON schema Swift bridge and scheme discovery",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D15",
+    "kind": "engineering_task",
+    "title": "Cargo SwiftPM Zig Bazel JS/TS native models",
+    "depends_on": [
+      "D07"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D16",
+    "kind": "engineering_task",
+    "title": "Editor project configuration inspector",
+    "depends_on": [
+      "D05",
+      "D06"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D17",
+    "kind": "engineering_task",
+    "title": "Native config writer: CMake JSON preset roundtrip",
+    "depends_on": [
+      "D11",
+      "D16"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D18",
+    "kind": "engineering_task",
+    "title": "Native config writer: Maven XML roundtrip",
+    "depends_on": [
+      "D09",
+      "D16"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D19",
+    "kind": "engineering_task",
+    "title": "Native config writer: Gradle Kotlin/Groovy AST",
+    "depends_on": [
+      "D08",
+      "D16"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D20",
+    "kind": "engineering_task",
+    "title": "Native config writer: Xcode typed Swift schema",
+    "depends_on": [
+      "D14",
+      "D16"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D21",
+    "kind": "engineering_task",
+    "title": "Native config writers other systems",
+    "depends_on": [
+      "D12",
+      "D13",
+      "D15",
+      "D16"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D22",
+    "kind": "engineering_task",
+    "title": "Native build/run/test execution end-to-end",
+    "depends_on": [
+      "D06",
+      "D08",
+      "D09",
+      "D11",
+      "D12",
+      "D13",
+      "D14",
+      "D15"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D23",
+    "kind": "engineering_task",
+    "title": "Terminal graphics ownership and focus routing",
+    "depends_on": [
+      "D05"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D24",
+    "kind": "engineering_task",
+    "title": "terminal-browser embedded TUI mode and pixel transport",
+    "depends_on": [
+      "D23"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D25",
+    "kind": "engineering_task",
+    "title": "Web framework dev server HMR/DOM/console protocols",
+    "depends_on": [
+      "D24",
+      "D15"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D26",
+    "kind": "engineering_task",
+    "title": "terminal-phone macOS simulator and MCP sessions",
+    "depends_on": [
+      "D23",
+      "D14"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D27",
+    "kind": "engineering_task",
+    "title": "terminal-phone real iPhone read-only and owner-control",
+    "depends_on": [
+      "D26"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D28",
+    "kind": "engineering_task",
+    "title": "Linux Apple xtool/omarchy SDK & build pipeline",
+    "depends_on": [
+      "D14",
+      "D06"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D29",
+    "kind": "engineering_task",
+    "title": "Linux Apple physical device signing install debug",
+    "depends_on": [
+      "D28",
+      "D27"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D30",
+    "kind": "engineering_task",
+    "title": "Android SDK/AVD discovery and target matching",
+    "depends_on": [
+      "D08",
+      "D06"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D31",
+    "kind": "engineering_task",
+    "title": "Android ARM64 Apple Silicon HVF acceleration",
+    "depends_on": [
+      "D30"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D32",
+    "kind": "engineering_task",
+    "title": "Android Linux KVM and GPU acceleration",
+    "depends_on": [
+      "D30"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D33",
+    "kind": "engineering_task",
+    "title": "Android emulator gRPC graphics and input",
+    "depends_on": [
+      "D23",
+      "D31",
+      "D32"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D34",
+    "kind": "engineering_task",
+    "title": "Physical Android ADB/scrcpy/UiAutomator",
+    "depends_on": [
+      "D23",
+      "D30"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D35",
+    "kind": "engineering_task",
+    "title": "JVM/Android/Swift/DAP runtime debug sessions",
+    "depends_on": [
+      "D22",
+      "D33",
+      "D26"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D36",
+    "kind": "engineering_task",
+    "title": "Agent tools for project/action/runtime observation",
+    "depends_on": [
+      "D22",
+      "D25",
+      "D26",
+      "D33"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D37",
+    "kind": "engineering_task",
+    "title": "Native IDE differential fixture suite",
+    "depends_on": [
+      "D17",
+      "D18",
+      "D19",
+      "D20",
+      "D21"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D38",
+    "kind": "engineering_task",
+    "title": "Visual input/graphics regression suite",
+    "depends_on": [
+      "D24",
+      "D26",
+      "D27",
+      "D33",
+      "D34"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D39",
+    "kind": "engineering_task",
+    "title": "Cross-platform CI matrix and Nix reproducibility",
+    "depends_on": [
+      "D22",
+      "D29",
+      "D38"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D40",
+    "kind": "engineering_task",
+    "title": "Formal Bend trust + contract proofs",
+    "depends_on": [
+      "D00"
+    ],
+    "status": "candidate",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D41",
+    "kind": "engineering_task",
+    "title": "Security audit of untrusted model evaluation and device authorization",
+    "depends_on": [
+      "D37",
+      "D38",
+      "D40"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D42",
+    "kind": "engineering_task",
+    "title": "Performance startup/frame/latency/reliability benchmarks",
+    "depends_on": [
+      "D39"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  },
+  {
+    "id": "D43",
+    "kind": "engineering_task",
+    "title": "Release evidence conformance audit and status publication",
+    "depends_on": [
+      "D35",
+      "D36",
+      "D37",
+      "D38",
+      "D39",
+      "D41",
+      "D42"
+    ],
+    "status": "planned",
+    "acceptance": "Evidence-backed implementation, tests and runtime verification; exact criteria in VALIDATION_GATES.md"
+  }
+]

@@ -1,0 +1,28 @@
+name: Rust scaffold checks (NOT the complete release gate)
+on:
+  push:
+  pull_request:
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Python harness unit tests
+        run: python3 -m unittest discover -s harness/tests -v
+      - name: Governance hashes
+        run: python3 scripts/check_governance.py
+      - name: Cargo test
+        run: cargo test --workspace
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+# Critical: no Bend proof step is pretended here. A separate required release job
+# must install a version-pinned verified Bend 2 and run bend PROOF.bend --verdict.
+# Do not mark release ready based on this workflow alone.

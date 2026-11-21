@@ -1,0 +1,14 @@
+/target
+/result
+*.log
+.DS_Store
+__pycache__/
+.pytest_cache/
+*.pyc
+.engineering-tmp/
+engineering/state/
+engineering/evidence/runtime/
+.cursor/mcp.json
+.env
+.env.*
+!.env.example

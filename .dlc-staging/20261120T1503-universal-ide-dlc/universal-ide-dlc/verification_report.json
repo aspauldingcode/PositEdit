@@ -1,0 +1,89 @@
+{
+  "capabilities": {
+    "adb": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "android_emulator": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "bend": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "cmake": {
+      "installed": true,
+      "status": "presence_only_not_verified"
+    },
+    "gradle": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "maven": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "meson": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "nix": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "rust_cargo": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "swift": {
+      "installed": true,
+      "status": "presence_only_not_verified"
+    },
+    "terminal_browser": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "terminal_phone": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "xcodebuild": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    },
+    "xtool": {
+      "installed": false,
+      "status": "presence_only_not_verified"
+    }
+  },
+  "host": {
+    "arch": "x86_64",
+    "os": "Linux",
+    "python": "3.13.5"
+  },
+  "reason": "Device, GPU, vendor native-model roundtrip, Rust host integration and platform matrices are not automatically proven",
+  "release_ready": false,
+  "schema": "dlc-verification-v1",
+  "tests": {
+    "graph_dag": {
+      "exit": 0,
+      "status": "pass",
+      "stderr_tail": "",
+      "stdout_tail": "Graph valid: 44 nodes, 93 dependency edges, no cycles\n"
+    },
+    "python_compile": {
+      "exit": 0,
+      "status": "pass",
+      "stderr_tail": "",
+      "stdout_tail": ""
+    },
+    "python_unit": {
+      "exit": 0,
+      "status": "pass",
+      "stderr_tail": "----------------------------------------------------------------------\nRan 41 tests in 6.135s\n\nOK\n",
+      "stdout_tail": ""
+    }
+  },
+  "when_epoch": 1795211931.3991706
+}

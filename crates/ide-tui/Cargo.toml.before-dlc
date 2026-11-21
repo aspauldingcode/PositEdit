@@ -1,0 +1,13 @@
+[package]
+name = "ide-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ide-ai = { path = "../ide-ai" }
+ide-core = { path = "../ide-core" }
+ide-navigation = { path = "../ide-navigation" }
+ide-syntax = { path = "../ide-syntax" }
+ratatui.workspace = true
+crossterm.workspace = true

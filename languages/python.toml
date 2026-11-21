@@ -1,0 +1,8 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "python"
+extensions = ["py"]
+server = "basedpyright-langserver --stdio"
+formatter = "ruff"
+build = "python3"
+test = "python3 -m pytest"
+debugger = "debugpy"

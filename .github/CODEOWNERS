@@ -1,0 +1,7 @@
+# Accepted laws and requirement ownership. Replace @YOUR_GITHUB_USERNAME after creating a repo.
+# This file is advisory until a protected GitHub branch and actual owners are configured.
+/LAWS.bend @YOUR_GITHUB_USERNAME
+/SPEC.bend @YOUR_GITHUB_USERNAME
+/laws.md @YOUR_GITHUB_USERNAME
+/engineering/policy.json @YOUR_GITHUB_USERNAME
+/engineering/governance-hashes.json @YOUR_GITHUB_USERNAME

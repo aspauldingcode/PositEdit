@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "project-filesystem": {
+      "command": "npx",
+      "args": ["--yes", "@modelcontextprotocol/server-filesystem@2.3.0", "REPLACE_WITH_ABSOLUTE_PROJECT_ROOT"]
+    },
+    "project-git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "REPLACE_WITH_ABSOLUTE_PROJECT_ROOT"]
+    }
+  }
+}

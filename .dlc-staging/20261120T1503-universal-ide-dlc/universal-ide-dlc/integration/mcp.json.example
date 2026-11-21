@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "terminal-phone": {
+      "command": "terminal-phone",
+      "args": ["mcp"]
+    }
+  }
+}

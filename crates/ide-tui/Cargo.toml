@@ -1,0 +1,16 @@
+[package]
+name = "ide-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ide-dlc-ui = { path = "../ide-dlc-ui" }
+ide-ai = { path = "../ide-ai" }
+ide-core = { path = "../ide-core" }
+ide-navigation = { path = "../ide-navigation" }
+ide-syntax = { path = "../ide-syntax" }
+ratatui.workspace = true
+crossterm.workspace = true
+serde_json.workspace = true
+libc = "0.2"

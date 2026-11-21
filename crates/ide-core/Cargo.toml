@@ -1,0 +1,9 @@
+[package]
+name = "ide-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ropey.workspace = true
+unicode-segmentation = "1.12"
