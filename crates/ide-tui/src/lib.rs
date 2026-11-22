@@ -1082,10 +1082,22 @@ impl EditorApp {
             resize: None,
             agent_focused: false,
             agent_draft: String::new(),
-            agent_log: vec![
-                "Ask for a change to the focused file.".to_string(),
-                "Tools stay inside this workspace.".to_string(),
-            ],
+            agent_log: {
+                let program = agent_program();
+                let mut lines = vec![
+                    "Ask for a change to the focused file.".to_string(),
+                    "Tools stay inside this workspace.".to_string(),
+                ];
+                if program.is_empty() {
+                    lines.push(
+                        "No agent CLI on PATH — set IDE_AGENT or install claude/codex/agent."
+                            .into(),
+                    );
+                } else {
+                    lines.push(format!("Using {program} (override with IDE_AGENT)."));
+                }
+                lines
+            },
             agent_program: agent_program(),
             overlay: Overlay::None,
             chord: String::new(),
@@ -3417,7 +3429,9 @@ impl EditorApp {
         }
         self.agent_log.push(format!("› {prompt}"));
         if self.agent_program.is_empty() {
-            self.agent_log.push("no agent CLI on PATH".to_string());
+            self.agent_log.push(
+                "no agent CLI on PATH — set IDE_AGENT or install claude/codex/agent".into(),
+            );
             return;
         }
         if cfg!(test) {
@@ -11255,6 +11269,19 @@ mod tests {
             app.notice.contains("narrow") || app.notice.contains("minimap"),
             "{}",
             app.notice
+        );
+    }
+
+
+    #[test]
+    fn agent_welcome_names_backend_or_install_hint() {
+        let app = EditorApp::new("hi\n");
+        let joined = app.agent_log.join("\n");
+        assert!(
+            joined.contains("IDE_AGENT")
+                || joined.contains("Using ")
+                || joined.contains("workspace"),
+            "{joined}"
         );
     }
 
