@@ -1414,6 +1414,10 @@ impl EditorApp {
         &self.workspace
     }
 
+    pub fn relative_line_numbers(&self) -> bool {
+        self.gutter.relative_numbers
+    }
+
     pub fn is_editing(&self) -> bool {
         self.editing
     }
@@ -3489,9 +3493,9 @@ impl EditorApp {
                 self.clear_chord();
                 self.gutter.relative_numbers = !self.gutter.relative_numbers;
                 self.notice = if self.gutter.relative_numbers {
-                    "relative line numbers on".into()
+                    "relative line numbers on · rn again for absolute".into()
                 } else {
-                    "absolute line numbers".into()
+                    "absolute line numbers · rn for relative".into()
                 };
             }
             "b" | "r" | "f" | "l" | "ll" | "z" => {
@@ -4057,9 +4061,9 @@ impl EditorApp {
                         } else if matches!(raw.trim(), "rn" | "relative" | "relativenumber") {
                             self.gutter.relative_numbers = !self.gutter.relative_numbers;
                             self.notice = if self.gutter.relative_numbers {
-                                "relative line numbers on".into()
+                                "relative line numbers on · rn again for absolute".into()
                             } else {
-                                "absolute line numbers".into()
+                                "absolute line numbers · rn for relative".into()
                             };
                         } else if matches!(raw.trim(), "hints" | "hover-hints" | "hoverhints") {
                             self.toggle_hover_hints();
@@ -8118,6 +8122,70 @@ fn hover_action(app: &EditorApp, column: u16, row: u16) -> Option<&'static str> 
             return Some("Dismiss notifications");
         }
     }
+    if let Some(hint) = editor_chrome_hover(app, &chrome, column, row) {
+        return Some(hint);
+    }
+    None
+}
+
+/// Gutter / minimap / scrollbar hover copy for the focused editor tile.
+fn editor_chrome_hover(
+    app: &EditorApp,
+    chrome: &layout::Chrome,
+    column: u16,
+    row: u16,
+) -> Option<&'static str> {
+    if app.pane_focus() != PaneFocus::Editor {
+        return None;
+    }
+    let window = app.layout_window(chrome.content, app.axis());
+    let slice = layout::tile_slice(window, app.focus, app.view)?;
+    let tile = Rect {
+        x: slice.screen_x,
+        y: slice.screen_y,
+        width: slice.width,
+        height: slice.height,
+    };
+    if !contains(tile, column, row) || tile.height <= 2 || tile.width <= 4 {
+        return None;
+    }
+    let local_x = column.saturating_sub(tile.x.saturating_add(1));
+    let local_y = row.saturating_sub(tile.y.saturating_add(1));
+    if local_y + 1 >= tile.height.saturating_sub(1) {
+        return None;
+    }
+    let inner_w = tile.width.saturating_sub(2);
+    let line_count = app.buffers.get(app.focus)?.document.len_lines().max(1);
+    let gutter_w = app.gutter.width_for(line_count);
+    let visible = tile.height.saturating_sub(2) as usize;
+    let (minimap_w, scroll_w) = minimap_gfx::edge_chrome(
+        inner_w,
+        minimap_gfx::host_is_kitty(),
+        app.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
+        app.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
+        line_count,
+        visible.max(1),
+    );
+    if local_x < gutter_w {
+        return Some(match gutter::hit(local_x, gutter_w) {
+            Some(gutter::GutterHit::Breakpoint) => "Click to toggle breakpoint",
+            Some(gutter::GutterHit::Number) => {
+                if app.gutter.relative_numbers {
+                    "Line numbers · rn for absolute"
+                } else {
+                    "Line numbers · rn for relative"
+                }
+            }
+            None => "Editor gutter",
+        });
+    }
+    let edge_x0 = inner_w.saturating_sub(minimap_w + scroll_w);
+    if minimap_w + scroll_w > 0 && local_x >= edge_x0 {
+        if scroll_w > 0 && local_x + 1 >= inner_w {
+            return Some("Drag the scrollbar to scroll");
+        }
+        return Some("Drag the minimap to scroll");
+    }
     None
 }
 
@@ -11188,6 +11256,29 @@ mod tests {
             "{}",
             app.notice
         );
+    }
+
+    #[test]
+    fn gutter_hover_mentions_relative_toggle() {
+        let mut app = EditorApp::new("a\nb\nc\nd\ne\nf\ng\nh\n");
+        app.note_frame(80, 24);
+        let chrome = app.frame_chrome(Rect::new(0, 0, 80, 24));
+        let window = app.layout_window(chrome.content, app.axis());
+        let slice = layout::tile_slice(window, app.focus, app.view).expect("tile");
+        let gutter_col = slice.screen_x.saturating_add(1);
+        let gutter_row = slice.screen_y.saturating_add(2);
+        let hint = editor_chrome_hover(&app, &chrome, gutter_col, gutter_row)
+            .unwrap_or("");
+        assert!(
+            hint.to_ascii_lowercase().contains("rn")
+                || hint.to_ascii_lowercase().contains("breakpoint")
+                || hint.to_ascii_lowercase().contains("line"),
+            "hint={hint:?} at ({gutter_col},{gutter_row}) tile={slice:?}"
+        );
+        app.handle(CommandKey::Char('r'));
+        app.handle(CommandKey::Char('n'));
+        assert!(app.relative_line_numbers());
+        assert!(app.notice.contains("relative"));
     }
 
     #[test]

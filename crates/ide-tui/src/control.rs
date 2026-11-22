@@ -242,6 +242,8 @@ fn status_info(app: &EditorApp) -> StatusInfo {
         runtime_dock: app.runtime_dock_id(),
         width: app.frame_width(),
         height: app.frame_height(),
+        relative_numbers: app.relative_line_numbers(),
+        control_socket: control_socket_path().display().to_string(),
     }
 }
 

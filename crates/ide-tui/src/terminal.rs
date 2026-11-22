@@ -1577,7 +1577,7 @@ impl Panel {
         let mut lines = Vec::with_capacity(rows);
         let message = self.spawn_error.clone().unwrap_or_else(|| {
             if self.sessions.is_empty() {
-                "no terminal yet. press + to add one".to_string()
+                "no terminal yet — press + (or click +) to open a shell".to_string()
             } else {
                 String::new()
             }

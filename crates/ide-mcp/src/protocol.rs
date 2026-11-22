@@ -13,6 +13,7 @@ pub const CONTROL_TOOLS: &[&str] = &[
     "posit_key",
     "posit_command",
     "posit_runtime",
+    "posit_pointer",
     "posit_capture",
 ];
 
@@ -51,6 +52,12 @@ pub struct StatusInfo {
     pub runtime_dock: Option<String>,
     pub width: u16,
     pub height: u16,
+    /// Absolute vs hybrid relative line numbers in the editor gutter.
+    #[serde(default)]
+    pub relative_numbers: bool,
+    /// Live Unix control socket path (empty if unknown).
+    #[serde(default)]
+    pub control_socket: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
