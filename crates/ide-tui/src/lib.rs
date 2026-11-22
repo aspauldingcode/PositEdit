@@ -2139,24 +2139,25 @@ impl EditorApp {
                     if !drag {
                         let inner = inset(chrome.editor);
                         let index = row.saturating_sub(inner.y) as usize;
-                        if index == 2 {
+                        // Rows: 0 title, 1 sidebar … 7 canvas (no blank padding).
+                        if index == 1 {
                             self.sidebar = !self.sidebar;
-                        } else if index == 3 {
+                        } else if index == 2 {
                             self.terminals.open = !self.terminals.open;
-                        } else if index == 4 {
+                        } else if index == 3 {
                             self.toggle_chat();
-                        } else if index == 5 {
+                        } else if index == 4 {
                             self.show_many = !self.show_many;
-                        } else if index == 6 {
+                        } else if index == 5 {
                             self.toggle_tab();
-                        } else if index == 7 {
+                        } else if index == 6 {
                             self.gutter.relative_numbers = !self.gutter.relative_numbers;
                             self.notice = if self.gutter.relative_numbers {
                                 "relative line numbers on · rn again for absolute".into()
                             } else {
                                 "absolute line numbers · rn for relative".into()
                             };
-                        } else if index == 8 {
+                        } else if index == 7 {
                             self.toggle_canvas_frozen();
                         }
                     }
@@ -2459,7 +2460,7 @@ impl EditorApp {
             self.focused().selected_text()
         };
         let Some(text) = text else {
-            self.notice = "nothing selected".to_string();
+            self.notice = "nothing selected — drag to select, then copy".into();
             return;
         };
         match clipboard::set(&text) {
@@ -2478,7 +2479,7 @@ impl EditorApp {
             return;
         }
         let Some(text) = self.focused().selected_text() else {
-            self.notice = "nothing selected".to_string();
+            self.notice = "nothing selected — drag to select, then cut".into();
             return;
         };
         match clipboard::set(&text) {
@@ -2492,7 +2493,9 @@ impl EditorApp {
 
     fn paste_clipboard(&mut self) {
         match clipboard::get() {
-            Ok(text) if text.is_empty() => self.notice = "clipboard empty".to_string(),
+            Ok(text) if text.is_empty() => {
+                self.notice = "clipboard empty — copy a selection first".into();
+            }
             Ok(text) => {
                 if self.terminals.focused() {
                     if self.terminals.write_key(text.as_bytes()) {
@@ -2774,7 +2777,8 @@ impl EditorApp {
 
     fn toggle_notifications(&mut self) {
         if self.notifications.is_empty() {
-            self.notice = "no notifications".to_string();
+            self.notice =
+                "no notifications yet — errors collect here (press i again later)".into();
             self.notifications_open = false;
             return;
         }
@@ -6293,9 +6297,9 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
     let sidebar = if app.sidebar { "on" } else { "off" };
     let chat = if app.chat { "on" } else { "off" };
     let columns = if app.show_many { "auto" } else { "full" };
+    // Keep this list short so a typical editor pane shows every row (no blank padding).
     let rows = [
         "Settings".to_string(),
-        String::new(),
         format!("sidebar   {sidebar}    < or drag"),
         format!(
             "terminal  {}    t",
@@ -6323,9 +6327,8 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
                 "live"
             }
         ),
-        "Tab completion is local and lexical until a model is installed.".to_string(),
-        "Minimap stays on the focused editor when the tile is wide enough.".to_string(),
-        String::new(),
+        "Tab is lexical until a local model is installed.".to_string(),
+        "Minimap stays on when the focused tile is wide enough.".to_string(),
         "Esc or ; closes".to_string(),
     ];
     let lines = rows
@@ -11319,6 +11322,18 @@ mod tests {
 
 
 
+
+    #[test]
+    fn empty_notifications_explain_themselves() {
+        let mut app = EditorApp::new("hi\n");
+        app.handle(CommandKey::Char('i'));
+        assert!(
+            app.notice.contains("no notifications") && app.notice.contains('i'),
+            "{}",
+            app.notice
+        );
+    }
+
     #[test]
     fn settings_lists_relative_and_canvas() {
         let mut app = EditorApp::new("hi\n");
@@ -11327,6 +11342,10 @@ mod tests {
         let screen = rendered_at(&app, 80, 24);
         assert!(screen.contains("relative"), "{screen}");
         assert!(screen.contains("canvas") || screen.contains("freeze"), "{screen}");
+        assert!(
+            screen.contains("Minimap") || screen.contains("minimap"),
+            "{screen}"
+        );
     }
 
     #[test]
