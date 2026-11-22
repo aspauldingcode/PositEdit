@@ -248,9 +248,10 @@ Editing
   Left gutter: click ● column for breakpoints, numbers to jump.
   rn toggles relative line numbers. Palette :42 / :+10 / :-5 jumps lines.
   Right edge: Kitty code minimap when Ghostty/kitty can draw it (glyph
-  fallback otherwise). Text scrollbars use eighth-block thumbs for sub-cell
-  motion. Click or drag either to scroll. The minimap replaces the text
-  scrollbar on Kitty hosts.
+  fallback otherwise). The minimap stays on the focused editor even when the
+  file fits. Text scrollbars use eighth-block thumbs and appear only when the
+  file needs motion. Click or drag either to scroll. On Kitty the minimap
+  replaces the text scrollbar.
   Click a panel to focus it. Only one of editor, terminal, agent, or file tree
   has the keyboard at a time. Hover cyan means click to focus.
   Click places the cursor. Drag selects. Double-click selects a word.

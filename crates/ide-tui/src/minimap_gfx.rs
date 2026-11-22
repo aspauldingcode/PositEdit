@@ -161,9 +161,11 @@ pub fn force_minimap() -> bool {
 
 /// Editor right-edge chrome: `(minimap_cols, scrollbar_cols)`.
 ///
-/// - No scroll needed → `(0, 0)` (hide both).
-/// - Kitty minimap → replaces text scrollbar: `(N, 0)`.
-/// - Glyph fallback → thin minimap + text scrollbar: `(2, 1)`.
+/// - Narrow tile (`< 18`) → `(0, 0)`.
+/// - Focused editor keeps a minimap even when the file fits (VS Code–style).
+/// - Text scrollbar only when the buffer overflows the viewport.
+/// - Kitty minimap replaces the text scrollbar: `(N, 0)`.
+/// - Glyph fallback → thin minimap + optional scrollbar: `(2, 0|1)`.
 pub fn edge_chrome(
     tile_w: u16,
     kitty: bool,
@@ -172,22 +174,23 @@ pub fn edge_chrome(
     line_count: usize,
     visible: usize,
 ) -> (u16, u16) {
-    if !needs_scroll(line_count, visible) || tile_w < 18 {
+    if tile_w < 18 {
         return (0, 0);
     }
-    // Jetsam-class pressure: keep a text scrollbar, drop the Kitty strip
+    let scrollable = needs_scroll(line_count, visible);
+    // Jetsam-class pressure: keep a text scrollbar when needed, drop the strip
     // (unless dogfood force is on).
     if pressure_critical && !force_minimap() {
-        return (0, 1);
+        return (0, u16::from(scrollable));
     }
     let cols = minimap_cols(tile_w, kitty, pressure_warning);
     if cols == 0 {
-        return (0, 1);
+        return (0, u16::from(scrollable));
     }
     if kitty {
         (cols, 0)
     } else {
-        (cols, 1)
+        (cols, u16::from(scrollable))
     }
 }
 
@@ -683,15 +686,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hide_when_content_fits() {
-        // Dogfood shells may export FORCE; this law is about production hide path.
+    fn keeps_minimap_when_content_fits() {
+        // Dogfood shells may export FORCE; this law is about production chrome.
         std::env::remove_var("POSIT_EDIT_MINIMAP_FORCE");
         assert!(!needs_scroll(20, 40));
         assert!(needs_scroll(100, 40));
-        assert_eq!(edge_chrome(80, true, false, false, 20, 40), (0, 0));
+        // Short files still get a minimap so the right edge isn't empty while editing.
+        let (mm, sb) = edge_chrome(80, true, false, false, 20, 40);
+        assert!(mm >= 12, "kitty minimap cols={mm}");
+        assert_eq!(sb, 0);
         assert_eq!(edge_chrome(80, true, false, false, 100, 40).1, 0); // kitty replaces sb
         assert_eq!(edge_chrome(80, false, false, false, 100, 40), (2, 1));
+        assert_eq!(edge_chrome(80, false, false, false, 20, 40), (2, 0)); // glyph, no sb
         assert_eq!(edge_chrome(80, true, true, true, 100, 40), (0, 1)); // critical → sb only
+        assert_eq!(edge_chrome(80, true, true, true, 20, 40), (0, 0)); // critical + fits
+    }
+
+    #[test]
+    fn render_base_rgb_stays_under_budget() {
+        let layout = layout_proportional(200, 0, 40, 400, 1);
+        let theme = MinimapTheme::dark();
+        let started = std::time::Instant::now();
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            let rgb = render_base_rgb(layout, 96, 400, theme, |line, _| {
+                format!("fn sample_{line}() {{ let x = {line}; }}")
+            });
+            assert_eq!(rgb.len(), 96 * 400 * 3);
+            samples.push(t0.elapsed());
+        }
+        samples.sort();
+        let median = samples[2];
+        assert!(
+            median < std::time::Duration::from_millis(25),
+            "median minimap render {median:?} over 25ms budget (wall {:?})",
+            started.elapsed()
+        );
     }
 
     #[test]
