@@ -280,11 +280,6 @@ impl CanvasSurface {
         self.kitty_back
     }
 
-    #[deprecated(note = "use upload_image_id / display_image_id")]
-    pub fn next_image_id(&self) -> u32 {
-        self.kitty_back
-    }
-
     pub fn mark_painted(&mut self) {
         self.painted_revision = self.revision;
         // Front shows what we just bound; back is free for the next upload.
@@ -863,8 +858,8 @@ pub fn kitty_pair_for_kind(kind: &str) -> (u32, u32) {
 /// Uses Unicode placeholders (`U=1`) so Ghostty/kitty size the image to the Canvas
 /// pane — never the full terminal window.
 ///
-/// Double-buffer: upload to `image_id` without deleting the visible frame first.
-/// Pass `retire_id` (previous front) to free after placeholders retarget.
+/// Convenience: upload without retiring another id (tests / one-shot paints).
+#[cfg(test)]
 pub fn paint_kitty_png(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
@@ -898,7 +893,8 @@ pub fn paint_kitty_png_swap(
     paint_kitty_png_bytes_swap(out, arbiter, inner, &bytes, image_id, retire_id)
 }
 
-/// Emit a Kitty virtual placement from in-memory PNG bytes (Ghostty-proven `f=100`).
+/// Convenience wrapper without retire (kept for unit tests).
+#[cfg(test)]
 pub fn paint_kitty_png_bytes(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
@@ -1077,6 +1073,7 @@ const CRC32_TABLE: [u32; 256] = {
 ///
 /// Same Ghostty-proven path as Canvas: PNG `f=100` + `U=1` unicode placeholders.
 /// Glyph minimap is only for hosts that are not Kitty/Ghostty.
+#[cfg(test)]
 pub fn paint_kitty_rgb(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
