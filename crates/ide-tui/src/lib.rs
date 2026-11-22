@@ -245,14 +245,18 @@ Editing
   Esc returns to view mode.
   Left gutter: click ● column for breakpoints, numbers to jump.
   rn toggles relative line numbers. Palette :42 / :+10 / :-5 jumps lines.
-  Right edge: code minimap + scrollbar — click or drag to scroll.
+  Right edge: Kitty code minimap when Ghostty/kitty can draw it (glyph
+  fallback otherwise). Text scrollbars use eighth-block thumbs for sub-cell
+  motion. Click or drag either to scroll. The minimap replaces the text
+  scrollbar on Kitty hosts.
   Click a panel to focus it. Only one of editor, terminal, agent, or file tree
   has the keyboard at a time. Hover cyan means click to focus.
   Click places the cursor. Drag selects. Double-click selects a word.
   Triple-click selects the line. Shift+arrows select while editing.
 
 Canvas (Browser / Phone)
-  Keys 6 and 7 open Browser and Phone on the right Canvas.
+  Keys 6 and 7 open Browser and Phone on the right Canvas (Kitty graphics).
+  Frames double-buffer so the last picture stays up until the next is ready.
   The bottom strip is the real controls: phone Home / Lock / Siri, or
   browser Back / Fwd / Reload (plus the page URL). Click those buttons.
   Ctrl-H / Ctrl-L / Ctrl-S also fire phone Home / Lock / Siri while focused.
