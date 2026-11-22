@@ -1,0 +1,13 @@
+posit-edit bench (render)
+  host_pressure=Urgent
+  rss_kib=2192
+  macos=27.2.1
+  samples=9 warmup=2 (BUDGETS.md methodology)
+[render]
+  draw_120x40                  median=   1.466ms  p95=   2.314ms  min=   1.459ms  max=   2.314ms  n=9
+    budget_p95<=50.000ms → PASS
+  scroll_1mib_urgent           median=   3.096ms  p95=   3.757ms  min=   2.969ms  max=   3.757ms  n=9
+    budget_p95<=31.250ms → PASS
+  minimap_rgb_96x400           median=   0.143ms  p95=   0.219ms  min=   0.140ms  max=   0.219ms  n=9
+    budget_p95<=31.250ms → PASS
+bench verdict=PASS
