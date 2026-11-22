@@ -162,6 +162,8 @@ pub struct EditorApp {
     runtime_dock: Option<String>,
     runtime_focused: bool,
     runtime_width: Option<u16>,
+    /// When true, keep the last Canvas frame; skip new Kitty uploads (edit stays snappy).
+    canvas_frozen: bool,
     /// Open Canvas surfaces (one per runtime). Active tab = `runtime_dock`.
     canvas_surfaces: Vec<canvas::CanvasSurface>,
     /// Last time we probed OS memory pressure / trimmed history.
@@ -257,6 +259,7 @@ Editing
 Canvas (Browser / Phone)
   Keys 6 and 7 open Browser and Phone on the right Canvas (Kitty graphics).
   Frames double-buffer so the last picture stays up until the next is ready.
+  :freeze holds the last frame so editing stays snappy; :thaw resumes.
   The bottom strip is the real controls: phone Home / Lock / Siri, or
   browser Back / Fwd / Reload (plus the page URL). Click those buttons.
   Ctrl-H / Ctrl-L / Ctrl-S also fire phone Home / Lock / Siri while focused.
@@ -293,6 +296,8 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
     let mut rows = vec![
         (";", "open settings"),
         (":", "open the command line"),
+        (":freeze", "freeze Canvas on the last frame"),
+        (":thaw", "resume live Canvas frames"),
         ("?", "open this guide"),
         ("h", "toggle mouse hover hints"),
         ("[", "focus the first buffer"),
@@ -1121,6 +1126,7 @@ impl EditorApp {
             runtime_dock: None,
             runtime_focused: false,
             runtime_width: None,
+            canvas_frozen: false,
             canvas_surfaces: Vec::new(),
             memory_pressure_at: None,
             last_pressure: PressureLevel::Normal,
@@ -1660,6 +1666,11 @@ impl EditorApp {
             "ctrl-w" | "ctrlw" => self.handle(CommandKey::CtrlW),
             "help" | "?" => self.handle(CommandKey::Help),
             "hints" => self.toggle_hover_hints(),
+            "freeze" | "canvas-freeze" => self.toggle_canvas_frozen(),
+            "thaw" | "canvas-thaw" => {
+                self.canvas_frozen = false;
+                self.notice = "Canvas live".into();
+            }
             other if other.len() == 1 => {
                 let ch = other.chars().next().unwrap();
                 self.handle(CommandKey::Char(ch));
@@ -1667,6 +1678,19 @@ impl EditorApp {
             other => return Err(format!("unsupported key: {other}")),
         }
         Ok(())
+    }
+
+    fn toggle_canvas_frozen(&mut self) {
+        if !self.canvas_open() {
+            self.notice = "open Browser or Phone first".into();
+            return;
+        }
+        self.canvas_frozen = !self.canvas_frozen;
+        self.notice = if self.canvas_frozen {
+            "Canvas frozen — last frame held (:freeze / :thaw)".into()
+        } else {
+            "Canvas live".into()
+        };
     }
 
     /// MCP / control-plane: synthetic mouse against the live frame (Canvas, editor, …).
@@ -1701,6 +1725,11 @@ impl EditorApp {
             "quit-request" | "quit" => self.handle(CommandKey::CtrlQ),
             "help" => self.handle(CommandKey::Help),
             "hints" => self.toggle_hover_hints(),
+            "freeze" | "canvas-freeze" => self.toggle_canvas_frozen(),
+            "thaw" | "canvas-thaw" | "unfreeze" => {
+                self.canvas_frozen = false;
+                self.notice = "Canvas live".into();
+            }
             "palette" => self.handle(CommandKey::CtrlP),
             "fullscreen" | "toggle-fullscreen" => self.handle(CommandKey::CtrlW),
             "terminal.toggle" | "toggle-terminal" => {
@@ -4030,6 +4059,11 @@ impl EditorApp {
                             };
                         } else if matches!(raw.trim(), "hints" | "hover-hints" | "hoverhints") {
                             self.toggle_hover_hints();
+                        } else if matches!(raw.trim(), "freeze" | "canvas-freeze" | "cf") {
+                            self.toggle_canvas_frozen();
+                        } else if matches!(raw.trim(), "thaw" | "canvas-thaw" | "unfreeze") {
+                            self.canvas_frozen = false;
+                            self.notice = "Canvas live".into();
                         } else {
                             self.notice = format!("unknown command: {raw}");
                         }
@@ -7648,8 +7682,10 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             server.poll(&mut app);
         }
         let mut canvas_dirty = false;
-        for surface in &mut app.canvas_surfaces {
-            canvas_dirty |= surface.poll_frame();
+        if !app.canvas_frozen {
+            for surface in &mut app.canvas_surfaces {
+                canvas_dirty |= surface.poll_frame();
+            }
         }
         if !batch.wants_present() && app.chord_due() {
             app.flush_chord();
@@ -8530,6 +8566,18 @@ fn paint_canvas_graphics(app: &mut EditorApp) -> io::Result<()> {
     if !surface.has_frame() && !surface.needs_paint() {
         return Ok(());
     }
+    // Frozen: keep the last Kitty frame; only rebind placeholders after Clear.
+    if app.canvas_frozen {
+        if size_changed || app.canvas_placeholders_stale.get() {
+            if let Some(image_id) = app.canvas_image_id {
+                canvas::write_kitty_placeholders(&mut stdout(), inner, image_id)?;
+                stdout().flush()?;
+                app.canvas_painted_size = Some(size);
+                app.canvas_placeholders_stale.set(false);
+            }
+        }
+        return Ok(());
+    }
     // Double-buffer: upload to back id, retarget placeholders, retire front.
     let path = surface.frame_path().to_path_buf();
     let dirty = surface.needs_paint() || size_changed;
@@ -9242,6 +9290,27 @@ mod tests {
         assert!(app.help_open());
         app.handle(CommandKey::Esc);
         assert!(!app.help_open());
+    }
+
+    #[test]
+    fn freeze_holds_canvas_frames_until_thaw() {
+        let mut app = EditorApp::new("hello");
+        app.note_frame(160, 40);
+        app.control_command("freeze").unwrap();
+        assert!(app.notice().contains("open Browser"));
+        assert!(!app.canvas_frozen);
+        app.workbench(WorkbenchAction::Browser);
+        assert!(app.canvas_open());
+        app.control_command("freeze").unwrap();
+        assert!(app.canvas_frozen);
+        assert!(app.notice().contains("frozen"));
+        app.control_command("thaw").unwrap();
+        assert!(!app.canvas_frozen);
+        assert_eq!(app.notice(), "Canvas live");
+        app.palette = true;
+        app.query = "freeze".into();
+        app.handle(CommandKey::Enter);
+        assert!(app.canvas_frozen);
     }
 
     #[test]
