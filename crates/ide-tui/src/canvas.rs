@@ -60,7 +60,10 @@ pub struct CanvasSurface {
     child: Option<Child>,
     revision: u64,
     painted_revision: u64,
-    kitty_id: u32,
+    /// Currently displayed Kitty image id (placeholders bind here).
+    kitty_front: u32,
+    /// Inactive id for the next upload (double-buffer; never blank the front).
+    kitty_back: u32,
     last_mtime: Option<SystemTime>,
     last_poll: Instant,
     /// Last published pane geometry — avoid rewriting the same JSON every frame.
@@ -95,7 +98,8 @@ impl CanvasSurface {
             child: None,
             revision: 0,
             painted_revision: 0,
-            kitty_id: 1,
+            kitty_front: kitty_pair_for_kind(kind).0,
+            kitty_back: kitty_pair_for_kind(kind).1,
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,
@@ -170,7 +174,8 @@ impl CanvasSurface {
             child: Some(child),
             revision: 0,
             painted_revision: 0,
-            kitty_id: 1,
+            kitty_front: kitty_pair_for_kind(kind).0,
+            kitty_back: kitty_pair_for_kind(kind).1,
             last_mtime: None,
             last_poll: Instant::now()
                 .checked_sub(Duration::from_secs(2))
@@ -265,14 +270,27 @@ impl CanvasSurface {
         self.revision > 0
     }
 
+    /// Id that currently owns the on-screen placeholders.
+    pub fn display_image_id(&self) -> u32 {
+        self.kitty_front
+    }
+
+    /// Inactive id — upload the next frame here before swapping.
+    pub fn upload_image_id(&self) -> u32 {
+        self.kitty_back
+    }
+
+    #[deprecated(note = "use upload_image_id / display_image_id")]
     pub fn next_image_id(&self) -> u32 {
-        self.kitty_id
+        self.kitty_back
     }
 
     pub fn mark_painted(&mut self) {
         self.painted_revision = self.revision;
-        self.kitty_id = self.kitty_id.wrapping_add(1).max(1);
+        // Front shows what we just bound; back is free for the next upload.
+        std::mem::swap(&mut self.kitty_front, &mut self.kitty_back);
     }
+
 
     /// Kill capture immediately. Quit must not wait on screenshot workers.
     pub fn stop(&mut self) {
@@ -828,20 +846,41 @@ pub fn write_kitty_placeholders(
     Ok(())
 }
 
+/// Stable Kitty id pair per Canvas kind (both < 256 for indexed placeholder FG).
+pub fn kitty_pair_for_kind(kind: &str) -> (u32, u32) {
+    match kind {
+        "browser" => (20, 21),
+        "phone" => (22, 23),
+        "android" => (24, 25),
+        _ => (26, 27),
+    }
+}
+
 /// Emit a Kitty virtual placement covering exactly `inner` cells with the PNG at `path`.
 ///
 /// Uses Unicode placeholders (`U=1`) so Ghostty/kitty size the image to the Canvas
 /// pane — never the full terminal window.
 ///
-/// Uses direct (`t=d`) transmission for Ghostty compatibility (file medium may be
-/// disabled). Callers must only invoke this when the frame is dirty — idle redraws
-/// rebind placeholders without re-uploading.
+/// Double-buffer: upload to `image_id` without deleting the visible frame first.
+/// Pass `retire_id` (previous front) to free after placeholders retarget.
 pub fn paint_kitty_png(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
     inner: Rect,
     path: &Path,
     image_id: u32,
+) -> io::Result<bool> {
+    paint_kitty_png_swap(out, arbiter, inner, path, image_id, None)
+}
+
+/// Upload `path` to `image_id`, bind placeholders, then optionally delete `retire_id`.
+pub fn paint_kitty_png_swap(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    path: &Path,
+    image_id: u32,
+    retire_id: Option<u32>,
 ) -> io::Result<bool> {
     if inner.width < 2 || inner.height < 2 {
         return Ok(false);
@@ -854,33 +893,7 @@ pub fn paint_kitty_png(
         Ok(bytes) if !bytes.is_empty() => bytes,
         _ => return Ok(false),
     };
-    // Drop any prior placement for this id before re-binding to the new cell box.
-    write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
-    let b64 = base64_encode(&bytes);
-    let cols = inner.width;
-    let rows = inner.height;
-    // Virtual placement: image is shown only where placeholders for this id exist.
-    let box_params = format!("U=1,c={cols},r={rows},z=-1073741825");
-    let mut first = true;
-    let mut rest = b64.as_str();
-    while !rest.is_empty() {
-        let take = rest.len().min(4096);
-        let (chunk, next) = rest.split_at(take);
-        let more = if next.is_empty() { 0 } else { 1 };
-        if first {
-            write!(
-                out,
-                "\x1b_Ga=T,f=100,t=d,i={image_id},q=2,{box_params},m={more};{chunk}\x1b\\"
-            )?;
-            first = false;
-        } else {
-            write!(out, "\x1b_Gm={more};{chunk}\x1b\\")?;
-        }
-        rest = next;
-    }
-    write_kitty_placeholders(out, inner, image_id)?;
-    out.flush()?;
-    Ok(true)
+    paint_kitty_png_bytes_swap(out, arbiter, inner, &bytes, image_id, retire_id)
 }
 
 /// Emit a Kitty virtual placement from in-memory PNG bytes (Ghostty-proven `f=100`).
@@ -891,6 +904,21 @@ pub fn paint_kitty_png_bytes(
     png: &[u8],
     image_id: u32,
 ) -> io::Result<bool> {
+    paint_kitty_png_bytes_swap(out, arbiter, inner, png, image_id, None)
+}
+
+/// Upload PNG to `image_id` without blanking the visible frame first.
+///
+/// Ghostty blanks cells when the *shown* id is retransmitted ([#15124](https://github.com/ghostty-org/ghostty/discussions/15124)).
+/// Upload the next frame to the inactive id, retarget placeholders, then retire the old id.
+pub fn paint_kitty_png_bytes_swap(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    png: &[u8],
+    image_id: u32,
+    retire_id: Option<u32>,
+) -> io::Result<bool> {
     if inner.width < 2 || inner.height < 2 || png.is_empty() || image_id == 0 {
         return Ok(false);
     }
@@ -898,7 +926,7 @@ pub fn paint_kitty_png_bytes(
     if backend != GraphicsBackend::Kitty {
         return Ok(false);
     }
-    write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    // Never delete `image_id` before transmit — that blanks the pane for 10–20ms+.
     let b64 = base64_encode(png);
     let cols = inner.width;
     let rows = inner.height;
@@ -921,6 +949,11 @@ pub fn paint_kitty_png_bytes(
         rest = next;
     }
     write_kitty_placeholders(out, inner, image_id)?;
+    if let Some(old) = retire_id {
+        if old != 0 && old != image_id {
+            write!(out, "\x1b_Ga=d,d=i,i={old},q=2\x1b\\")?;
+        }
+    }
     out.flush()?;
     Ok(true)
 }
@@ -1051,10 +1084,23 @@ pub fn paint_kitty_rgb(
     height: u32,
     image_id: u32,
 ) -> io::Result<bool> {
+    paint_kitty_rgb_swap(out, arbiter, inner, rgb, width, height, image_id, None)
+}
+
+pub fn paint_kitty_rgb_swap(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    rgb: &[u8],
+    width: u32,
+    height: u32,
+    image_id: u32,
+    retire_id: Option<u32>,
+) -> io::Result<bool> {
     let Some(png) = encode_rgb_png(width, height, rgb) else {
         return Ok(false);
     };
-    paint_kitty_png_bytes(out, arbiter, inner, &png, image_id)
+    paint_kitty_png_bytes_swap(out, arbiter, inner, &png, image_id, retire_id)
 }
 
 /// Drop a previously placed Kitty image by id (quiet).
@@ -1139,6 +1185,32 @@ mod tests {
     }
 
     #[test]
+    fn kitty_swap_does_not_blank_upload_id_first() {
+        unsafe {
+            std::env::set_var("TERM", "xterm-kitty");
+            std::env::set_var("TERM_PROGRAM", "kitty");
+        }
+        let mut arbiter = GraphicsArbiter::default();
+        let inner = Rect {
+            x: 2,
+            y: 2,
+            width: 8,
+            height: 4,
+        };
+        let rgb = vec![0x20_u8; 8 * 4 * 3];
+        let mut out = Vec::new();
+        paint_kitty_rgb_swap(&mut out, &mut arbiter, inner, &rgb, 8, 4, 42, Some(41)).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        let transmit = text.find("a=T,").expect("transmit");
+        let retire = text.find("a=d,d=i,i=41").expect("retire old front");
+        assert!(
+            !text[..transmit].contains("a=d,d=i,i=42"),
+            "must not delete the upload id before transmit"
+        );
+        assert!(retire > transmit, "retire after transmit+placeholders");
+    }
+
+    #[test]
     fn kitty_rgb_paint_encodes_png_f100() {
         // SAFETY: test-only env mutation for graphics probe.
         unsafe {
@@ -1199,7 +1271,8 @@ mod tests {
             child: None,
             revision: 1,
             painted_revision: 0,
-            kitty_id: 1,
+            kitty_front: 22,
+            kitty_back: 23,
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,
@@ -1435,7 +1508,8 @@ exit 0
             child: None,
             revision: 1,
             painted_revision: 0,
-            kitty_id: 1,
+            kitty_front: kitty_pair_for_kind(kind).0,
+            kitty_back: kitty_pair_for_kind(kind).1,
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,

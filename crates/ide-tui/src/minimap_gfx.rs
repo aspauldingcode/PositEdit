@@ -7,9 +7,18 @@
 use crate::graphics::GraphicsBackend;
 use ratatui::layout::Rect;
 
-/// Stable Kitty image id for the focused editor minimap (away from Canvas ids).
+/// Stable Kitty image id pair for the focused editor minimap (away from Canvas).
 /// Keep below 256 so unicode-placeholder FG uses indexed color (Ghostty-friendly).
 pub const EDITOR_MINIMAP_IMAGE_ID: u32 = 41;
+pub const EDITOR_MINIMAP_IMAGE_ID_ALT: u32 = 42;
+
+pub fn minimap_alternate_id(id: u32) -> u32 {
+    if id == EDITOR_MINIMAP_IMAGE_ID {
+        EDITOR_MINIMAP_IMAGE_ID_ALT
+    } else {
+        EDITOR_MINIMAP_IMAGE_ID
+    }
+}
 
 /// Default device pixels per source line (readable preview height).
 /// Locked to Bend `bend/minimap` laws (scale 1 → 8 px/line).

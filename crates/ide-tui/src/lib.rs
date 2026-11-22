@@ -8329,14 +8329,16 @@ fn present(
     // Prefer Kitty whenever TERM/TERM_PROGRAM/Ghostty say so — glyph minimap
     // is only the non-Kitty fallback.
     app.graphics.prefer_kitty_from_env();
-    // Draw under synchronized update; transmit Kitty *after* so Ghostty applies
-    // placements against the committed placeholder cells (not a mid-sync CUP race).
+    // One synchronized frame: ratatui cells + Kitty placeholder swap together so
+    // Ghostty never paints a blank underlay between draw and image bind.
     execute!(stdout(), BeginSynchronizedUpdate)?;
     let drawn = terminal.draw(|frame| draw(frame, app));
+    let canvas = paint_canvas_graphics(app);
+    let minimap = paint_editor_minimap_graphics(app);
     execute!(stdout(), EndSynchronizedUpdate)?;
     drawn?;
-    paint_canvas_graphics(app)?;
-    paint_editor_minimap_graphics(app)?;
+    canvas?;
+    minimap?;
     Ok(())
 }
 
@@ -8389,7 +8391,6 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         return Ok(());
     };
     let (cell_w, cell_h) = canvas_cell_pixels(app);
-    let image_id = minimap_gfx::EDITOR_MINIMAP_IMAGE_ID;
     // Re-sample each frame so Ghostty light cream wins over stale COLORFGBG.
     app.minimap_theme = minimap_gfx::terminal_theme();
     let theme = app.minimap_theme;
@@ -8426,7 +8427,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         scale,
         theme: theme.id,
     };
-    let dirty = app.editor_minimap_key != Some(key) || app.editor_minimap_id != Some(image_id);
+    let dirty = app.editor_minimap_key != Some(key);
     if dirty {
         let content = minimap_gfx::MinimapContentKey {
             revision,
@@ -8437,6 +8438,11 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
             scale,
             theme: theme.id,
         };
+        let front = app
+            .editor_minimap_id
+            .unwrap_or(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
+        let upload = minimap_gfx::minimap_alternate_id(front);
+        let retire = app.editor_minimap_id;
         // Field-split: buffers + cache + graphics can borrow together; tinted
         // RGB stays in cache and feeds PNG encode without an extra Vec copy.
         let painted = {
@@ -8444,22 +8450,23 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
             let rgb = cache.rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
                 app.buffers[focus].document.line_prefix(line, cols)
             });
-            canvas::paint_kitty_rgb(
+            canvas::paint_kitty_rgb_swap(
                 &mut stdout(),
                 &mut app.graphics,
                 rect,
                 rgb,
                 px_w,
                 px_h,
-                image_id,
+                upload,
+                retire,
             )?
         };
         if painted {
             app.editor_minimap_key = Some(key);
-            app.editor_minimap_id = Some(image_id);
+            app.editor_minimap_id = Some(upload);
         }
     } else if let Some(id) = app.editor_minimap_id {
-        // Cells already carry placeholders from paint_tile; rebind quietly.
+        // Ratatui blank underlay wiped placeholders — rebind the live id.
         canvas::write_kitty_placeholders(&mut stdout(), rect, id)?;
         stdout().flush()?;
     }
@@ -8469,6 +8476,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
 fn clear_editor_minimap(app: &mut EditorApp) -> io::Result<()> {
     if let Some(id) = app.editor_minimap_id.take() {
         canvas::delete_kitty_image(&mut stdout(), id)?;
+        canvas::delete_kitty_image(&mut stdout(), minimap_gfx::minimap_alternate_id(id))?;
         app.editor_minimap_key = None;
         app.minimap_frame_cache.borrow_mut().clear();
     }
@@ -8518,25 +8526,27 @@ fn paint_canvas_graphics(app: &mut EditorApp) -> io::Result<()> {
     if !surface.has_frame() && !surface.needs_paint() {
         return Ok(());
     }
-    // Image id must stay stable across placeholder rewrites between transmits.
+    // Double-buffer: upload to back id, retarget placeholders, retire front.
     let path = surface.frame_path().to_path_buf();
     let dirty = surface.needs_paint() || size_changed;
+    let upload = surface.upload_image_id();
+    let display = surface.display_image_id();
+    let had_display = app.canvas_image_id.is_some();
     if dirty {
-        let image_id = surface
-            .next_image_id()
-            .wrapping_add((index as u32).saturating_add(1).saturating_mul(17))
-            .max(1);
-        let painted = canvas::paint_kitty_png(
+        let retire = if had_display { Some(display) } else { None };
+        let painted = canvas::paint_kitty_png_swap(
             &mut stdout(),
             &mut app.graphics,
             inner,
             &path,
-            image_id,
+            upload,
+            retire,
         )?;
         if painted {
             app.canvas_surfaces[index].mark_painted();
             app.canvas_painted_size = Some(size);
-            app.canvas_image_id = Some(image_id);
+            app.canvas_image_id = Some(app.canvas_surfaces[index].display_image_id());
+            app.canvas_placeholders_stale.set(false);
         }
     } else if size_changed || app.canvas_placeholders_stale.get() {
         // Re-bind only after Clear/resize — not on every editor scroll.
