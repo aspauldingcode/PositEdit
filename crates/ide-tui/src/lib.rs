@@ -2149,6 +2149,15 @@ impl EditorApp {
                             self.show_many = !self.show_many;
                         } else if index == 6 {
                             self.toggle_tab();
+                        } else if index == 7 {
+                            self.gutter.relative_numbers = !self.gutter.relative_numbers;
+                            self.notice = if self.gutter.relative_numbers {
+                                "relative line numbers on · rn again for absolute".into()
+                            } else {
+                                "absolute line numbers · rn for relative".into()
+                            };
+                        } else if index == 8 {
+                            self.toggle_canvas_frozen();
                         }
                     }
                     return;
@@ -3654,6 +3663,15 @@ impl EditorApp {
                 CommandKey::Char('<') | CommandKey::Char('s') => self.sidebar = !self.sidebar,
                 CommandKey::Char('>') | CommandKey::Char('c') => self.toggle_chat(),
                 CommandKey::Char('f') => self.show_many = !self.show_many,
+                CommandKey::Char('r') => {
+                    self.gutter.relative_numbers = !self.gutter.relative_numbers;
+                    self.notice = if self.gutter.relative_numbers {
+                        "relative line numbers on · rn again for absolute".into()
+                    } else {
+                        "absolute line numbers · rn for relative".into()
+                    };
+                }
+                CommandKey::Char('z') => self.toggle_canvas_frozen(),
                 _ => {}
             },
             Overlay::Vim => {
@@ -6008,7 +6026,14 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
             ));
         }
         if app.tree_hits.is_empty() {
-            lines.push(Line::from("(no match)"));
+            lines.push(Line::styled(
+                if app.tree_query.as_deref().unwrap_or("").is_empty() {
+                    "type to filter the file tree"
+                } else {
+                    "no files match — Esc clears the filter"
+                },
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         return Paragraph::new(Text::from(lines)).block(files_block(
             app.tree_focused,
@@ -6044,7 +6069,10 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
         ));
     }
     if lines.is_empty() {
-        lines.push(Line::from("(empty)"));
+        lines.push(Line::styled(
+            "empty folder — o opens Yazi, ll finds files",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     let tree = app.tree_rect();
     let hovered = app.hover_in(tree) && !app.sidebar_button(
@@ -6279,7 +6307,24 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
             "tab       {}    Ctrl-Alt-T",
             if app.tab_enabled { "on" } else { "off" }
         ),
+        format!(
+            "relative  {}    rn",
+            if app.gutter.relative_numbers {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "canvas    {}    :freeze / :thaw",
+            if app.canvas_frozen {
+                "frozen"
+            } else {
+                "live"
+            }
+        ),
         "Tab completion is local and lexical until a model is installed.".to_string(),
+        "Minimap stays on the focused editor when the tile is wide enough.".to_string(),
         String::new(),
         "Esc or ; closes".to_string(),
     ];
@@ -11272,6 +11317,33 @@ mod tests {
         );
     }
 
+
+
+    #[test]
+    fn settings_lists_relative_and_canvas() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(80, 24);
+        app.overlay = Overlay::Settings;
+        let screen = rendered_at(&app, 80, 24);
+        assert!(screen.contains("relative"), "{screen}");
+        assert!(screen.contains("canvas") || screen.contains("freeze"), "{screen}");
+    }
+
+    #[test]
+    fn empty_tree_filter_hint() {
+        let mut app = EditorApp::new("hi\n");
+        let root = temp_dir("empty-tree-hint");
+        app.set_workspace(root.clone());
+        app.tree.clear();
+        app.tree_query = Some("zzz".into());
+        app.tree_hits.clear();
+        let screen = rendered_at(&app, 80, 24);
+        assert!(
+            screen.contains("no files match") || screen.contains("Esc"),
+            "{screen}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn agent_welcome_names_backend_or_install_hint() {
