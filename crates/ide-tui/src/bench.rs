@@ -249,6 +249,23 @@ fn bench_render() -> bool {
     });
     // Aspirational ≤16ms; gate 25ms under Urgent (must feel snappy, not "soft locked").
     ok &= print_stats(&scroll, Some(25.0));
+
+    // Focused minimap RGB strip (always-on chrome): keep under a tight budget so
+    // short-file always-visible does not tax every frame.
+    let layout = crate::minimap_gfx::layout_proportional(400, 0, 40, 400, 1);
+    let theme = crate::minimap_gfx::MinimapTheme::dark();
+    let minimap = time_iters(
+        "minimap_rgb_96x400",
+        DEFAULT_WARMUP,
+        DEFAULT_SAMPLES,
+        || {
+            let rgb = crate::minimap_gfx::render_base_rgb(layout, 96, 400, theme, |line, _| {
+                format!("fn sample_{line}() {{ let x = {line}; }}")
+            });
+            assert_eq!(rgb.len(), 96 * 400 * 3);
+        },
+    );
+    ok &= print_stats(&minimap, Some(25.0));
     ok
 }
 
