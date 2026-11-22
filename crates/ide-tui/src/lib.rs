@@ -1877,6 +1877,9 @@ impl EditorApp {
             self.tile_drag = None;
             self.view = window.origin(self.focus) as f32;
             self.target = self.view;
+            if window.tile_width < 18 {
+                self.notice = "editor too narrow for minimap — widen past 18 columns".into();
+            }
         } else if self.tile_drag.is_none() {
             self.target = window.origin(self.focus) as f32;
         }
@@ -6484,11 +6487,10 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
         }
     }
     if lines.len() == 1 {
-        lines.push(Line::from(if finder.query.is_empty() {
-            "type to search"
-        } else {
-            "(no match)"
-        }));
+        lines.push(Line::styled(
+            finder_empty_hint(finder.kind, finder.query.is_empty()),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     Paragraph::new(Text::from(lines)).block(
         Block::default()
@@ -6496,6 +6498,17 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
             .title("Tab switches")
             .borders(Borders::ALL),
     )
+}
+
+fn finder_empty_hint(kind: FinderKind, query_empty: bool) -> &'static str {
+    match (kind, query_empty) {
+        (FinderKind::Files, true) => "type a path fragment · Tab switches to Grep",
+        (FinderKind::Files, false) => "no files match — try a shorter fragment",
+        (FinderKind::Grep, true) => "type text to search the workspace",
+        (FinderKind::Grep, false) => "no matches in the workspace",
+        (FinderKind::Buffers, true) => "type to filter open buffers · Tab switches to Find",
+        (FinderKind::Buffers, false) => "no open buffer matches",
+    }
 }
 
 fn finder_len(finder: &Finder) -> usize {
@@ -11145,6 +11158,36 @@ mod tests {
             .render(1, 20, 8, true, ide_spatial::MinimapPriority::Structure, false)
             .is_none());
         assert!(cache.hidden());
+    }
+
+    #[test]
+    fn finder_empty_hint_names_the_mode() {
+        assert!(finder_empty_hint(FinderKind::Files, true).contains("path"));
+        assert!(finder_empty_hint(FinderKind::Grep, false).contains("no matches"));
+        assert!(finder_empty_hint(FinderKind::Buffers, true).contains("buffers"));
+        let mut app = EditorApp::new("hi\n");
+        app.set_workspace(std::env::temp_dir());
+        app.open_finder(FinderKind::Grep);
+        if let Some(finder) = app.finder.as_mut() {
+            finder.query = "zzznomatchzzz".into();
+        }
+        app.refresh_finder();
+        let screen = rendered_at(&app, 80, 24);
+        assert!(
+            screen.contains("no matches") || screen.contains("workspace"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn narrow_layout_explains_missing_minimap() {
+        let mut app = EditorApp::new("short\n");
+        app.note_frame(12, 24);
+        assert!(
+            app.notice.contains("narrow") || app.notice.contains("minimap"),
+            "{}",
+            app.notice
+        );
     }
 
     #[test]
