@@ -5,6 +5,7 @@ mod format;
 mod highlight;
 
 pub use format::{format_manually, format_with, formatter_for, FormatOutcome, Formatter};
+pub use highlight::{node_at_byte, NodeRange};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -109,6 +110,13 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
     if let Some(path) = path {
         if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
             let ext = ext.to_ascii_lowercase();
+            // .h is shared by C and ObjC; prefer ObjC when the buffer looks like it.
+            if ext == "h"
+                && looks_like_objc(text)
+                && profiles.iter().any(|profile| profile.id == "objc")
+            {
+                return "objc".to_string();
+            }
             if let Some(profile) = profiles
                 .iter()
                 .find(|profile| profile.extensions.iter().any(|item| item == &ext))
@@ -126,7 +134,19 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
     if text.contains("fn main") && text.contains("let ") {
         return "rust".to_string();
     }
+    if looks_like_objc(text) {
+        return "objc".to_string();
+    }
     "plain".to_string()
+}
+
+fn looks_like_objc(text: &str) -> bool {
+    text.contains("@interface")
+        || text.contains("@implementation")
+        || text.contains("@protocol")
+        || text.contains("#import")
+        || text.contains("@property")
+        || text.contains("@end")
 }
 
 fn shebang_language(text: &str) -> Option<String> {
@@ -247,6 +267,10 @@ mod tests {
             ("swift", "func shown() -> Int { return 1 }\n"),
             ("zig", "pub fn shown() void {}\n"),
             ("nix", "let answer = 1; in answer\n"),
+            (
+                "objc",
+                "@interface Shown : NSObject\n@property (nonatomic) NSString *name;\n- (void)shown;\n@end\n",
+            ),
         ];
         for (language, source) in samples {
             let spans = highlight(language, source);
@@ -255,6 +279,47 @@ mod tests {
                 "{language} produced no keyword span: {spans:?}"
             );
         }
+    }
+
+    #[test]
+    fn objc_m_and_mm_and_objc_headers_are_detected() {
+        let profiles = profiles();
+        assert!(profiles.iter().any(|profile| profile.id == "objc"));
+        assert_eq!(
+            detect(&profiles, Some(Path::new("App.m")), "@implementation App\n@end\n"),
+            "objc"
+        );
+        assert_eq!(
+            detect(
+                &profiles,
+                Some(Path::new("App.mm")),
+                "#import <Foundation/Foundation.h>\n@interface App : NSObject\n@end\n"
+            ),
+            "objc"
+        );
+        assert_eq!(
+            detect(
+                &profiles,
+                Some(Path::new("App.h")),
+                "#import <Foundation/Foundation.h>\n@interface App : NSObject\n@end\n"
+            ),
+            "objc"
+        );
+        assert_eq!(
+            detect(&profiles, Some(Path::new("plain.h")), "int answer(void);\n"),
+            "c"
+        );
+        let source = "@interface App : NSObject\n- (NSString *)name;\n@end\n";
+        let spans = highlight("objc", source);
+        assert_eq!(
+            highlight::covers(source, &spans, "@interface"),
+            Some(TokenKind::Keyword),
+            "expected @interface keyword, spans={spans:?}"
+        );
+        assert!(
+            spans.iter().any(|span| span.kind == TokenKind::Type),
+            "expected a type span in objc sample: {spans:?}"
+        );
     }
 
     #[test]
@@ -364,6 +429,47 @@ mod tests {
         match format_manually("plain", "fn main(){let x=1;}") {
             FormatOutcome::Unavailable { program } => assert_eq!(program, "none"),
             other => panic!("plain text was formatted: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn java_format_falls_back_when_google_java_format_missing() {
+        let source = "class A{int x;}\n";
+        match format_manually("java", source) {
+            FormatOutcome::Applied(text) => {
+                assert!(text.contains("class A"), "{text}");
+                assert!(text.contains('\n') || text.contains(' '), "{text}");
+                assert_ne!(text, source);
+            }
+            FormatOutcome::Unchanged => {}
+            FormatOutcome::Unavailable { program } => {
+                // Neither preferred nor clang-format fallback is installed.
+                assert!(
+                    program.contains("google-java-format"),
+                    "{program}"
+                );
+            }
+            FormatOutcome::Failed { detail, .. } => panic!("java format failed: {detail}"),
+        }
+    }
+
+    #[test]
+    fn nix_format_falls_back_when_nixfmt_missing() {
+        let source = "{ a=1; }\n";
+        match format_manually("nix", source) {
+            FormatOutcome::Applied(text) => {
+                assert!(text.contains('a'), "{text}");
+                assert_ne!(text, source);
+            }
+            FormatOutcome::Unchanged => {}
+            FormatOutcome::Unavailable { program } => {
+                assert!(program.contains("nixfmt"), "{program}");
+                assert!(
+                    program.contains("alejandra") || program.contains("nixpkgs-fmt"),
+                    "{program}"
+                );
+            }
+            FormatOutcome::Failed { detail, .. } => panic!("nix format failed: {detail}"),
         }
     }
 

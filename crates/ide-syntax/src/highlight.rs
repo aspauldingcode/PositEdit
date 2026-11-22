@@ -50,11 +50,59 @@ pub fn highlight_source(language: &str, text: &str) -> Vec<Span> {
     spans
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeRange {
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub kind: String,
+}
+
+/// Smallest named node covering `byte_offset`, for lossless structural edits.
+pub fn node_at_byte(language: &str, text: &str, byte_offset: usize) -> Option<NodeRange> {
+    if language == "plain" || language.is_empty() || byte_offset > text.len() {
+        return None;
+    }
+    let grammar = grammar(language)?;
+    let mut parser = Parser::new();
+    parser.set_language(&grammar).ok()?;
+    let tree = parser.parse(text, None)?;
+    let mut node = tree.root_node();
+    let mut best = None;
+    loop {
+        if node.is_named()
+            && node.start_byte() <= byte_offset
+            && byte_offset < node.end_byte().max(node.start_byte().saturating_add(1))
+        {
+            best = Some(NodeRange {
+                start_byte: node.start_byte(),
+                end_byte: node.end_byte(),
+                kind: node.kind().to_string(),
+            });
+        }
+        let mut next = None;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.start_byte() <= byte_offset && byte_offset < child.end_byte().max(child.start_byte().saturating_add(1))
+            {
+                next = Some(child);
+                break;
+            }
+        }
+        match next {
+            Some(child) => node = child,
+            None => break,
+        }
+    }
+    best
+}
+
 fn grammar(language: &str) -> Option<Language> {
     Some(match language {
         "rust" => tree_sitter_rust::LANGUAGE.into(),
         "python" => tree_sitter_python::LANGUAGE.into(),
         "c" => tree_sitter_c::LANGUAGE.into(),
+        // tree-sitter-objc covers Objective-C and typical .mm ObjC++ mixtures.
+        "objc" | "objective-c" | "objective-cpp" | "objcpp" => tree_sitter_objc::LANGUAGE.into(),
         "javascript" => tree_sitter_javascript::LANGUAGE.into(),
         "typescript" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         "java" => tree_sitter_java::LANGUAGE.into(),
@@ -84,6 +132,10 @@ fn collect(node: Node<'_>, spans: &mut Vec<Span>) {
 fn classify(node: Node<'_>) -> Option<TokenKind> {
     let kind = node.kind();
     if !node.is_named() {
+        // ObjC @keywords (@interface, @property, @end, …) arrive as anonymous '@…' tokens.
+        if kind.starts_with('@') {
+            return Some(TokenKind::Keyword);
+        }
         return kind
             .chars()
             .next()
@@ -94,7 +146,11 @@ fn classify(node: Node<'_>) -> Option<TokenKind> {
     if lower.contains("comment") {
         return Some(TokenKind::Comment);
     }
-    if lower.contains("string") || lower.contains("char_literal") {
+    if lower.contains("string")
+        || lower.contains("char_literal")
+        || lower.contains("string_literal")
+        || kind == "string_content"
+    {
         return Some(TokenKind::String);
     }
     if lower.contains("integer") || lower.contains("float") || lower == "number" {
@@ -102,19 +158,33 @@ fn classify(node: Node<'_>) -> Option<TokenKind> {
     }
     if matches!(
         kind,
-        "type_identifier" | "primitive_type" | "builtin_type" | "predefined_type"
+        "type_identifier"
+            | "primitive_type"
+            | "builtin_type"
+            | "predefined_type"
+            | "class_name"
+            | "protocol_name"
+            | "sized_type_specifier"
     ) {
         return Some(TokenKind::Type);
     }
-    if kind == "identifier" || kind == "property_identifier" || kind == "field_identifier" {
+    if kind == "identifier"
+        || kind == "property_identifier"
+        || kind == "field_identifier"
+        || kind == "keyword_identifier"
+    {
         if let Some(parent) = node.parent() {
             let parent_kind = parent.kind();
             let name = parent.child_by_field_name("name");
             if name.is_some_and(|child| child.id() == node.id())
                 && (parent_kind.contains("function")
                     || parent_kind.contains("method")
-                    || parent_kind == "function_declarator")
+                    || parent_kind == "function_declarator"
+                    || parent_kind == "message_expression")
             {
+                return Some(TokenKind::Function);
+            }
+            if parent_kind.contains("selector") || parent_kind == "keyword_selector" {
                 return Some(TokenKind::Function);
             }
         }

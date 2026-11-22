@@ -235,7 +235,8 @@ def plan(project: Project, action: str, cfg: dict[str,Any] | None = None) -> Pla
         raise CapabilityError('IntelliJ metadata alone does not define a portable build command; choose Gradle, Maven or explicit JPS bridge')
     if s == 'gradle':
         exe = _tool(root, 'gradlew', 'gradle')
-        task = {'build':'build','test':'test','run':cfg.get('run_task'),'configure':cfg.get('config_task')}.get(action)
+        # Default `run` matches the Application plugin / IntelliJ Gradle run config name.
+        task = {'build':'build','test':'test','run':cfg.get('run_task') or 'run','configure':cfg.get('config_task')}.get(action)
         if not task or not re.fullmatch(r'[\w:.\-]+',task):
             raise CapabilityError(f'Gradle {action} requires an explicit valid task' if action!='build' and action!='test' else 'Invalid Gradle task')
         args = [exe,task]

@@ -4,5 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "posit-edit-mcp"
+path = "src/bin/posit-edit-mcp.rs"
+
 [dependencies]
 ide-ai = { path = "../ide-ai" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+libc = "0.2"

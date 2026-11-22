@@ -6,11 +6,15 @@ license.workspace = true
 
 [dependencies]
 ide-dlc-ui = { path = "../ide-dlc-ui" }
+ide-local-tab-ui = { path = "../ide-local-tab-ui" }
 ide-ai = { path = "../ide-ai" }
 ide-core = { path = "../ide-core" }
+ide-mcp = { path = "../ide-mcp" }
 ide-navigation = { path = "../ide-navigation" }
+ide-spatial = { path = "../ide-spatial" }
 ide-syntax = { path = "../ide-syntax" }
 ratatui.workspace = true
 crossterm.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 libc = "0.2"

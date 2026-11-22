@@ -1,14 +1,77 @@
 //! The operating system clipboard. There is no editor-local clipboard.
+//!
+//! Set `POSIT_EDIT_CLIPBOARD=memory` for an in-process pasteboard (tests / CI).
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+fn pasteboard_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn memory_clip() -> &'static Mutex<Option<String>> {
+    static CLIP: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CLIP.get_or_init(|| Mutex::new(None))
+}
+
+fn use_memory_clipboard() -> bool {
+    cfg!(test)
+        || std::env::var_os("POSIT_EDIT_CLIPBOARD").is_some_and(|value| value == "memory")
+}
 
 pub fn set(text: &str) -> Result<(), String> {
-    run_first(copy_tools(), |program, args| {
-        write_tool(program, args, text)
-    })
+    let _guard = pasteboard_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if use_memory_clipboard() {
+        *memory_clip()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(text.to_string());
+        return Ok(());
+    }
+    set_unlocked(text)
 }
 
 pub fn get() -> Result<String, String> {
+    let _guard = pasteboard_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if use_memory_clipboard() {
+        return memory_clip()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| "memory clipboard empty".into());
+    }
+    get_unlocked()
+}
+
+/// Write then confirm round-trip, retrying briefly against external pasteboard noise.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_confirmed(text: &str) -> Result<(), String> {
+    set(text)?;
+    if get().ok().as_deref() == Some(text) {
+        return Ok(());
+    }
+    if use_memory_clipboard() {
+        return Err("memory clipboard round-trip failed".into());
+    }
+    for _ in 0..8 {
+        set(text)?;
+        if get().ok().as_deref() == Some(text) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    Err("clipboard round-trip failed under contention".into())
+}
+
+fn set_unlocked(text: &str) -> Result<(), String> {
+    run_first(copy_tools(), |program, args| write_tool(program, args, text))
+}
+
+fn get_unlocked() -> Result<String, String> {
     run_first(paste_tools(), read_tool)
 }
 

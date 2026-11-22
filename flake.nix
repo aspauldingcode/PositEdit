@@ -67,8 +67,23 @@
             export HOME=$TMPDIR
             export XDG_CACHE_HOME=$TMPDIR/cache
             mkdir -p "$out" "$XDG_CACHE_HOME"
-            bend ${./.}/PROOF.bend --verdict > "$out/verdict.txt"
-            grep -q "ALL PROOFS CHECK" "$out/verdict.txt"
+            : > "$out/verdict.txt"
+            verdict() {
+              local f="$1"
+              local name="$2"
+              local tmp
+              tmp="$(mktemp)"
+              echo "== $name ==" | tee -a "$out/verdict.txt"
+              bend "$f" --verdict | tee -a "$out/verdict.txt" | tee "$tmp"
+              grep -q "ALL PROOFS CHECK" "$tmp"
+            }
+            # Root accepted laws + additive modules (doc/minimap/scroll/palette/dlc).
+            verdict ${./.}/PROOF.bend root
+            verdict ${./.}/bend/palette/PROOF.bend palette
+            verdict ${./.}/bend/dlc/PROOF.bend dlc
+            verdict ${./.}/bend/doc/PROOF.bend doc
+            verdict ${./.}/bend/minimap/PROOF.bend minimap
+            verdict ${./.}/bend/scroll/PROOF.bend scroll
           '';
         };
       });

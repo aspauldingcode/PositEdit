@@ -31,6 +31,7 @@ pub enum DapState {
 pub struct DapCapabilities {
     pub supports_configuration_done: bool,
     pub supports_step_back: bool,
+    pub supports_read_memory: bool,
 }
 
 #[derive(Debug)]
@@ -111,6 +112,26 @@ impl DapSession {
         Ok(self.request("stepBack", json!({})))
     }
 
+    pub fn capabilities(&self) -> &DapCapabilities {
+        &self.capabilities
+    }
+
+    pub fn read_memory(&mut self, memory_reference: &str, count: u64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        if !self.capabilities.supports_read_memory {
+            return Err(DapError::Unsupported("readMemory"));
+        }
+        Ok(self.request(
+            "readMemory",
+            json!({
+                "memoryReference": memory_reference,
+                "count": count
+            }),
+        ))
+    }
+
     pub fn push_adapter(&mut self, payload: &str) -> Result<(), DapError> {
         let value: Value = serde_json::from_str(payload).map_err(|_| DapError::Malformed)?;
         let kind = value
@@ -129,6 +150,8 @@ impl DapSession {
                     .unwrap_or(false);
                 self.capabilities.supports_step_back =
                     body["supportsStepBack"].as_bool().unwrap_or(false);
+                self.capabilities.supports_read_memory =
+                    body["supportsReadMemoryRequest"].as_bool().unwrap_or(false);
                 self.state = DapState::Initialized;
             }
             "event" => self.on_event(
@@ -218,6 +241,26 @@ mod tests {
             .push_adapter(r#"{"seq":3,"type":"event","event":"terminated"}"#)
             .unwrap();
         assert_eq!(session.state(), DapState::Exited);
+    }
+
+    #[test]
+    fn read_memory_requires_advertised_capability() {
+        let mut session = DapSession::new();
+        session.initialize().unwrap();
+        session
+            .push_adapter(r#"{"seq":1,"type":"response","command":"initialize","success":true,"body":{}}"#)
+            .unwrap();
+        session.launch("./app").unwrap();
+        session
+            .push_adapter(
+                r#"{"seq":2,"type":"event","event":"stopped","body":{"reason":"breakpoint"}}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            session.read_memory("0x1", 8),
+            Err(DapError::Unsupported("readMemory"))
+        );
+        assert!(!session.capabilities().supports_read_memory);
     }
 
     #[test]
