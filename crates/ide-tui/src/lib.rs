@@ -4303,16 +4303,16 @@ impl EditorApp {
         self.overlay = Overlay::None;
         let name = name.trim().to_string();
         if name.is_empty() || name.contains('/') || name.contains('\0') {
-            self.notice = "rename needs a file name".to_string();
+            self.notice = "rename needs a plain file name (no /)".into();
             return;
         }
         let Some(path) = self.focused().path.clone() else {
-            self.notice = "rename needs a path".to_string();
+            self.notice = "rename needs a saved file — s to save first".into();
             return;
         };
         let dest = path.parent().unwrap_or(Path::new(".")).join(&name);
         if dest.exists() {
-            self.notice = "rename target exists".to_string();
+            self.notice = format!("rename blocked — {name} already exists");
             return;
         }
         match std::fs::rename(&path, &dest) {
@@ -4337,9 +4337,11 @@ impl EditorApp {
         }
         let Some((program, args)) = task_line(&language, path.as_deref(), run) else {
             self.notice = if run {
-                "no run for this language".to_string()
+                format!("no run for {language} — save a known source file, or open the project root")
             } else {
-                "no build for this language".to_string()
+                format!(
+                    "no build for {language} — open the project root (Cargo/Gradle/CMake/…)"
+                )
             };
             return;
         };
@@ -4351,7 +4353,7 @@ impl EditorApp {
 
     fn run_c(&mut self, path: Option<&Path>, cwd: &Path) {
         let Some(file) = path else {
-            self.notice = "run needs a path".to_string();
+            self.notice = "run needs a saved .c file — s to save, or o to open one".into();
             return;
         };
         let out = std::env::temp_dir().join(format!("axiom-run-{}", std::process::id()));
@@ -4501,7 +4503,8 @@ impl EditorApp {
     fn workbench(&mut self, action: WorkbenchAction) {
         let Some(script) = find_dlc_script() else {
             self.show_output("*workbench*", "dlc.py is not installed\n");
-            self.notice = "workbench unavailable".to_string();
+            self.notice =
+                "workbench unavailable — install DLC scripts or open a detected project root".into();
             return;
         };
         match action {
@@ -5054,7 +5057,7 @@ impl EditorApp {
             return false;
         }
         let Some(path) = self.buffers[index].path.clone() else {
-            self.notice = "save needs a path".to_string();
+            self.notice = "save needs a path — rr to name the buffer, or o to open a file".into();
             return false;
         };
         match std::fs::write(&path, self.buffers[index].text()) {
@@ -7833,8 +7836,14 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             let _ = terminal.clear();
             match chosen {
                 Ok(paths) => app.open_picked(&paths),
-                Err(ChooseError::Missing) => app.notice = "yazi unavailable".to_string(),
-                Err(ChooseError::Failed(detail)) => app.notice = format!("yazi failed: {detail}"),
+                Err(ChooseError::Missing) => {
+                    app.notice =
+                        "external file picker missing — install yazi, or use o / ll inside Posit"
+                            .into();
+                }
+                Err(ChooseError::Failed(detail)) => {
+                    app.notice = format!("file picker failed: {detail}");
+                }
             }
             present_needed = true;
         }
@@ -11418,6 +11427,20 @@ mod tests {
         app.handle(CommandKey::Enter);
         assert!(
             app.notice.contains("unknown") && app.notice.contains("F1"),
+            "{}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn unsaved_buffer_save_explains_next_step() {
+        let mut app = EditorApp::new("scratch\n");
+        app.note_frame(80, 24);
+        assert!(app.focused().path.is_none());
+        app.handle(CommandKey::Char('s'));
+        assert!(
+            app.notice.contains("save needs a path")
+                && (app.notice.contains("rr") || app.notice.contains('o')),
             "{}",
             app.notice
         );
