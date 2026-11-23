@@ -5849,7 +5849,10 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
                 );
             } else {
-                frame.render_widget(sidebar_rail(app.hover_in(chrome.tree)), chrome.tree);
+                frame.render_widget(
+                    sidebar_rail(app.hover_in(chrome.tree), app.minimap_theme.is_light()),
+                    chrome.tree,
+                );
             }
         }
         if chrome.agent.width > 4 {
@@ -5872,7 +5875,10 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                 scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
             );
         } else if chrome.agent.width > 0 {
-            frame.render_widget(agent_rail(app.hover_in(chrome.agent)), chrome.agent);
+            frame.render_widget(
+                agent_rail(app.hover_in(chrome.agent), app.minimap_theme.is_light()),
+                chrome.agent,
+            );
         }
         if chrome.canvas.width > 0 && app.canvas_open() {
             // Leave Canvas cells alone while the editor scrolls — Clear would wipe
@@ -5887,6 +5893,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     hover_canvas && app.pane_focus() != PaneFocus::Runtime,
                     false,
                     true,
+                    app.minimap_theme.is_light(),
                 );
                 let close_hot = app.hover.is_some_and(|(c, r)| {
                     app.canvas_title_hit(c, r, &chrome) == Some(CanvasTitleHit::Close)
@@ -5985,6 +5992,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
             hovered && !app.terminals.focused(),
             seam_hot,
             true,
+            app.minimap_theme.is_light(),
         );
         let local_hover = app.hover.and_then(|(column, row)| {
             contains(chrome.terminal, column, row).then_some((
@@ -6191,6 +6199,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
             app.tree_focused,
             false,
             false,
+            light,
         ));
     }
     let inner = app.tree_rect().width.saturating_sub(2) as usize;
@@ -6243,10 +6252,11 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
             app.tree_focused,
             hovered && !app.tree_focused,
             app.sidebar_title_hot(),
+            app.minimap_theme.is_light(),
         ))
 }
 
-fn files_block(focused: bool, hovered: bool, toggle_hot: bool) -> Block<'static> {
+fn files_block(focused: bool, hovered: bool, toggle_hot: bool, light: bool) -> Block<'static> {
     let mark = if toggle_hot {
         Style::default()
             .fg(Color::Black)
@@ -6261,7 +6271,7 @@ fn files_block(focused: bool, hovered: bool, toggle_hot: bool) -> Block<'static>
         .title("Files")
         .title(Line::from(TuiSpan::styled(" < ", mark)).alignment(Alignment::Right))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(panel_border(focused, hovered, false, false)))
+        .border_style(Style::default().fg(panel_border(focused, hovered, false, false, light)))
 }
 
 fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
@@ -6311,6 +6321,7 @@ fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
         hovered && !app.agent_focused,
         app.resize_hot(Side::Right),
         false,
+        app.minimap_theme.is_light(),
     );
     let toggle = if app.agent_title_hot() {
         Style::default()
@@ -6411,25 +6422,33 @@ fn edge_hit(pane: Rect, column: u16, row: u16, left: bool) -> bool {
     }
 }
 
-fn agent_rail(hot: bool) -> Paragraph<'static> {
+fn agent_rail(hot: bool, light: bool) -> Paragraph<'static> {
     Paragraph::new(">")
         .alignment(Alignment::Center)
         .style(hot_mark(hot))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if hot { Color::Yellow } else { Color::Gray })),
+                .border_style(Style::default().fg(if hot {
+                    Color::Yellow
+                } else {
+                    panel_border(false, false, false, false, light)
+                })),
         )
 }
 
-fn sidebar_rail(hot: bool) -> Paragraph<'static> {
+fn sidebar_rail(hot: bool, light: bool) -> Paragraph<'static> {
     Paragraph::new("<")
         .alignment(Alignment::Center)
         .style(hot_mark(hot))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if hot { Color::Yellow } else { Color::Gray })),
+                .border_style(Style::default().fg(if hot {
+                    Color::Yellow
+                } else {
+                    panel_border(false, false, false, false, light)
+                })),
         )
 }
 
@@ -6814,6 +6833,7 @@ fn paint_tile(
         tile_hovered && !(editor_owns && index == app.focus),
         app.hover_tile_seam(index),
         app.editing && editor_owns && index == app.focus,
+        app.minimap_theme.is_light(),
     );
     let close_hover = app
         .hover
@@ -7736,13 +7756,16 @@ fn focus_color(editing: bool) -> Color {
 }
 
 /// Focused = magenta/orange. Hovered unfocused = cyan (click to focus). Seams = yellow.
-fn panel_border(focused: bool, hovered: bool, seam_hot: bool, editing: bool) -> Color {
+/// Idle Gray washes on cream — use muted taupe when the host is light.
+fn panel_border(focused: bool, hovered: bool, seam_hot: bool, editing: bool, light: bool) -> Color {
     if seam_hot {
         Color::Yellow
     } else if focused {
         focus_color(editing)
     } else if hovered {
         Color::Cyan
+    } else if light {
+        muted_fg(true)
     } else {
         Color::Gray
     }
@@ -9923,7 +9946,7 @@ mod tests {
         assert!(!app.agent_focused);
         app.set_hover(chrome.terminal.x + 2, chrome.terminal.y + 2);
         assert_eq!(
-            panel_border(false, true, false, false),
+            panel_border(false, true, false, false, false),
             Color::Cyan,
             "unfocused hover must read as click-to-focus"
         );
@@ -11599,6 +11622,23 @@ mod tests {
         assert!(
             screen.contains("Minimap") || screen.contains("minimap"),
             "{screen}"
+        );
+    }
+
+    #[test]
+    fn idle_panel_borders_stay_visible_on_light_hosts() {
+        assert_eq!(
+            panel_border(false, false, false, false, false),
+            Color::Gray
+        );
+        assert_eq!(
+            panel_border(false, false, false, false, true),
+            muted_fg(true)
+        );
+        assert_ne!(
+            panel_border(false, false, false, false, true),
+            Color::Gray,
+            "ANSI Gray washes on cream"
         );
     }
 
