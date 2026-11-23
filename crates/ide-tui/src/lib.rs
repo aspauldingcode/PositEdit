@@ -4071,7 +4071,7 @@ impl EditorApp {
     fn spatial_save_snapshot(&mut self) {
         if ide_spatial::SnapshotStore::opt_out(&self.workspace) {
             self.notice =
-                "spatial snapshots opted out — remove .posit/no-spatial-snapshots to enable".into();
+                "spatial snapshots opted out — remove .posit/spatial-opt-out to enable".into();
             return;
         }
         let panes = self
