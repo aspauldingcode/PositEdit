@@ -5832,7 +5832,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                 let inner = inset(chrome.tree);
                 let visible = inner.height.max(1) as usize;
                 let total = app.tree.len().max(1);
-                scrollbar::paint(
+                scrollbar::paint_with(
                     frame.buffer_mut(),
                     Rect {
                         x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -5845,6 +5845,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                         visible,
                         total,
                     },
+                    scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
                 );
             } else {
                 frame.render_widget(sidebar_rail(app.hover_in(chrome.tree)), chrome.tree);
@@ -5854,7 +5855,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
             frame.render_widget(agent_paragraph(app, chrome.agent), chrome.agent);
             let inner = inset(chrome.agent);
             let total = app.agent_log.len().max(1) + 2;
-            scrollbar::paint(
+            scrollbar::paint_with(
                 frame.buffer_mut(),
                 Rect {
                     x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -5867,6 +5868,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     visible: inner.height.max(1) as usize,
                     total,
                 },
+                scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
             );
         } else if chrome.agent.width > 0 {
             frame.render_widget(agent_rail(app.hover_in(chrome.agent)), chrome.agent);
@@ -6002,7 +6004,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         if chrome.terminal.height > 2 && chrome.terminal.width > 4 {
             let inner = inset(chrome.terminal);
             let (offset, total) = app.terminals.scroll_metrics();
-            scrollbar::paint(
+            scrollbar::paint_with(
                 frame.buffer_mut(),
                 Rect {
                     x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -6015,6 +6017,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     visible: inner.height.max(1) as usize,
                     total: total.max(1),
                 },
+                scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
             );
         }
     }
@@ -6957,7 +6960,7 @@ fn paint_tile(
     }
     // Text scrollbar only when Kitty is not owning the right edge.
     if scroll_w > 0 {
-        scrollbar::paint(
+        scrollbar::paint_with(
             &mut screen,
             Rect {
                 x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -6970,6 +6973,7 @@ fn paint_tile(
                 visible: visible.max(1),
                 total: line_count,
             },
+            scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
         );
     }
     let frame_area = frame.area();

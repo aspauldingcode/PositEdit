@@ -136,13 +136,30 @@ impl MinimapTheme {
             view_delta: 28,
         }
     }
+
+    /// Lightness from background luminance — never key off `id` (ids move).
+    pub fn is_light(self) -> bool {
+        let (r, g, b) = self.bg;
+        // Rec. 601-ish: (3R + 4G + B) / 8
+        (u16::from(r) * 3 + u16::from(g) * 4 + u16::from(b)) / 8 >= 128
+    }
 }
 
 /// Detect light/dark from host defaults / `COLORFGBG`.
 ///
 /// Ghostty's default UI is light cream, and it often exports `COLORFGBG=15;0`
 /// even on light themes — so Ghostty prefers light unless explicitly dark.
+/// Override with `POSIT_EDIT_THEME=light|dark` when the host lies.
 pub fn terminal_theme() -> MinimapTheme {
+    match std::env::var("POSIT_EDIT_THEME")
+        .ok()
+        .map(|v| v.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("light" | "cream" | "day") => return MinimapTheme::light(),
+        Some("dark" | "night") => return MinimapTheme::dark(),
+        _ => {}
+    }
     let program = std::env::var("TERM_PROGRAM")
         .unwrap_or_default()
         .to_ascii_lowercase();
@@ -703,6 +720,17 @@ impl MinimapFrameCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theme_luminance_and_env_override() {
+        assert!(MinimapTheme::light().is_light());
+        assert!(!MinimapTheme::dark().is_light());
+        std::env::set_var("POSIT_EDIT_THEME", "dark");
+        assert!(!terminal_theme().is_light());
+        std::env::set_var("POSIT_EDIT_THEME", "light");
+        assert!(terminal_theme().is_light());
+        std::env::remove_var("POSIT_EDIT_THEME");
+    }
 
     #[test]
     fn keeps_minimap_when_content_fits() {

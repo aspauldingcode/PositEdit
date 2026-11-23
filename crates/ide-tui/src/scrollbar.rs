@@ -80,13 +80,16 @@ impl ScrollMetrics {
     }
 }
 
-/// Track + thumb palette. Thumb **must** share the track background so
-/// eighth-block glyphs (`▄`/`▀`/…) composite as the same scrollbar color —
-/// filled = `thumb` fg, empty = track bg (not a second slate fill).
+/// Track + thumb palette.
+///
+/// Eighth-block glyphs (`▄`/`▀`/…) composite as: filled = `thumb` fg, empty =
+/// **track** (not pane `bg` / Reset). Otherwise partial thumbs wash into the
+/// editor and stop reading as one scrollbar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScrollColors {
     pub track: Color,
     pub thumb: Color,
+    /// Pane behind the idle `│` rail (usually Reset).
     pub bg: Color,
 }
 
@@ -108,12 +111,15 @@ impl ScrollColors {
         }
     }
 
+    #[allow(dead_code)] // public API for MCP / external themed callers
     pub fn from_env() -> Self {
-        Self::for_theme(crate::minimap_gfx::terminal_theme().id == 1)
+        // Luminance — never `theme.id == …` (ids move; that silently forced dark).
+        Self::for_theme(crate::minimap_gfx::terminal_theme().is_light())
     }
 }
 
 /// Paint a 1-column scrollbar with sub-cell thumb edges.
+#[allow(dead_code)] // thin wrapper; UI prefers `paint_with` + live minimap theme
 pub fn paint(buf: &mut Buffer, area: Rect, metrics: ScrollMetrics) {
     paint_with(buf, area, metrics, ScrollColors::from_env());
 }
@@ -126,11 +132,10 @@ pub fn paint_with(buf: &mut Buffer, area: Rect, metrics: ScrollMetrics, colors: 
     let x = area.x.saturating_add(area.width.saturating_sub(1));
     let track_y = area.y;
     let track_h = area.height;
-    // Shared bg: partial Unicode blocks use fg for ink and bg for the rest of
-    // the cell — that rest must match the track, or sub-cell edges look like a
-    // different scrollbar.
+    // Idle rail sits on the pane (`bg`). Partial Unicode blocks use thumb fg
+    // over **track** so empty eighths stay scrollbar-colored, not editor wash.
     let track_style = Style::default().fg(colors.track).bg(colors.bg);
-    let thumb_style = Style::default().fg(colors.thumb).bg(colors.bg);
+    let thumb_style = Style::default().fg(colors.thumb).bg(colors.track);
     for row in 0..track_h {
         let cell = &mut buf[(x, track_y.saturating_add(row))];
         cell.set_symbol("│");
@@ -255,10 +260,9 @@ mod tests {
 
     #[test]
     fn eighth_glyphs_share_track_background() {
-        // Sub-cell caps must not introduce a second bg (the old slate thumb bg).
+        // Sub-cell caps composite against the track — not pane Reset.
         let light = ScrollColors::for_theme(true);
         let dark = ScrollColors::for_theme(false);
-        assert_eq!(light.bg, light.bg);
         assert_eq!(light.track, Color::Rgb(176, 174, 155));
         assert_eq!(light.thumb, Color::Rgb(90, 90, 80));
         assert_eq!(light.bg, Color::Reset);
@@ -275,15 +279,31 @@ mod tests {
         let fine = metrics.fine_thumb(12).expect("fine");
         let top_row = (fine.top_units / SUBDIV) as u16;
         let cell = &buf[(1, top_row)];
-        assert_eq!(cell.bg, light.bg, "thumb cell bg must match track bg");
+        assert_eq!(
+            cell.bg, light.track,
+            "thumb eighth empty must be track, got {:?}",
+            cell.bg
+        );
         assert_eq!(cell.fg, light.thumb);
-        // A track-only row keeps the shared bg too.
+        // Idle rail rows keep pane bg behind the │.
         let track_row = if top_row > 0 { 0 } else { 11 };
         let track = &buf[(1, track_row)];
         if track.symbol() == "│" {
             assert_eq!(track.bg, light.bg);
             assert_eq!(track.fg, light.track);
         }
+    }
+
+    #[test]
+    fn scrollbar_theme_follows_minimap_luminance_not_id() {
+        assert!(crate::minimap_gfx::MinimapTheme::light().is_light());
+        assert!(!crate::minimap_gfx::MinimapTheme::dark().is_light());
+        // Regression: light theme id moved off `1`; id==1 checks forced dark scrollbars.
+        assert_ne!(crate::minimap_gfx::MinimapTheme::light().id, 1);
+        let light = ScrollColors::for_theme(crate::minimap_gfx::MinimapTheme::light().is_light());
+        let dark = ScrollColors::for_theme(crate::minimap_gfx::MinimapTheme::dark().is_light());
+        assert_eq!(light.track, Color::Rgb(176, 174, 155));
+        assert_eq!(dark.track, Color::DarkGray);
     }
 
     /// Exact vectors from `bend/scroll/LAWS.bend`.
