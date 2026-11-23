@@ -130,6 +130,32 @@ pub const KNOWN_SPELLINGS: &[&str] = &[
     "mm",
 ];
 
+/// Live matches while the palette query is open (prefix first, then typo).
+/// At most three spellings — used for the footer hint and Tab completion.
+pub fn completions(raw: &str) -> Vec<&'static str> {
+    let query = normalize(raw).to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut hits: Vec<&'static str> = KNOWN_SPELLINGS
+        .iter()
+        .copied()
+        .filter(|spelling| spelling.starts_with(query.as_str()))
+        .collect();
+    hits.sort_by_key(|spelling| (spelling.len(), *spelling));
+    if let Some(index) = hits.iter().position(|spelling| *spelling == query.as_str()) {
+        let exact = hits.remove(index);
+        hits.insert(0, exact);
+    }
+    if hits.is_empty() {
+        if let Some(hint) = suggest(raw) {
+            return vec![hint];
+        }
+    }
+    hits.truncate(3);
+    hits
+}
+
 /// Best near-miss for an unknown palette token, if any.
 ///
 /// Prefers unique prefixes, then tiny edit distance (typos like `mimimap` /
@@ -249,6 +275,16 @@ mod tests {
         assert_eq!(suggest("mini"), Some("minimap"));
         assert_eq!(suggest("definitely-not-a-command"), None);
         assert_eq!(suggest("mm"), None, "exact known spelling is not a suggestion");
+    }
+
+    #[test]
+    fn completions_list_prefixes_and_typo_fallback() {
+        let mini = completions("mini");
+        assert_eq!(mini.first().copied(), Some("minimap"));
+        assert!(completions("minimap").contains(&"minimap"));
+        assert_eq!(completions("mimimap"), vec!["minimap"]);
+        assert!(completions("").is_empty());
+        assert!(completions("zzznope").is_empty());
     }
 
     #[test]

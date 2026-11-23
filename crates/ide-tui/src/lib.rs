@@ -4180,6 +4180,17 @@ impl EditorApp {
                 self.query.pop();
             }
             CommandKey::Char(ch) => self.query.push(ch),
+            CommandKey::Tab => {
+                let comps = palette::completions(&self.query);
+                let Some(top) = comps.first().copied() else {
+                    return;
+                };
+                let current = palette::normalize(&self.query).to_ascii_lowercase();
+                if top != current.as_str() {
+                    self.query = top.to_string();
+                    self.notice = format!("Tab → :{top} · Enter runs");
+                }
+            }
             CommandKey::Enter => {
                 let raw = self.query.trim().to_string();
                 self.query.clear();
@@ -6082,8 +6093,25 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         TuiSpan::raw(status_body),
     ]);
     if app.palette {
-        let palette = Paragraph::new(format!(": {}", app.query))
-            .block(Block::default().title("Palette").borders(Borders::ALL));
+        let comps = palette::completions(&app.query);
+        let mut block = Block::default().title("Palette").borders(Borders::ALL);
+        if !comps.is_empty() {
+            let current = palette::normalize(&app.query).to_ascii_lowercase();
+            let footer = if comps[0] == current.as_str() {
+                format!("Enter runs · {}", comps.join("  "))
+            } else {
+                let rest = comps[1..].join("  ");
+                if rest.is_empty() {
+                    format!("Tab → {} · Enter runs", comps[0])
+                } else {
+                    format!("Tab → {} · {}", comps[0], rest)
+                }
+            };
+            block = block.title_bottom(Line::from(footer));
+        } else if app.query.trim().is_empty() {
+            block = block.title_bottom(Line::from("type a command · Tab completes · Esc closes"));
+        }
+        let palette = Paragraph::new(format!(": {}", app.query)).block(block);
         frame.render_widget(palette, bottom_band(area));
     } else if let Some(prompt) = prompt_line(app) {
         let panel = Paragraph::new(prompt).block(
@@ -11781,6 +11809,26 @@ mod tests {
             "{}",
             app.notice
         );
+    }
+
+    #[test]
+    fn palette_tab_completes_top_match_then_enter_runs() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(100, 30);
+        assert!(app.minimap_on);
+        app.palette = true;
+        app.query = "mini".into();
+        let screen = rendered_at(&app, 100, 30);
+        assert!(
+            screen.contains("Tab") && screen.contains("minimap"),
+            "{screen}"
+        );
+        app.handle(CommandKey::Tab);
+        assert_eq!(app.query, "minimap");
+        assert!(app.palette, "Tab completes without closing");
+        app.handle(CommandKey::Enter);
+        assert!(!app.minimap_on, "completed :minimap should toggle off");
+        assert!(!app.palette);
     }
 
     #[test]
