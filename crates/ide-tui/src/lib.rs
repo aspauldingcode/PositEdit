@@ -7173,7 +7173,15 @@ fn paint_tile(
             .x
             .saturating_add(inner.width.saturating_sub(minimap_w + scroll_w));
         let theme = app.minimap_theme;
-        let underlay_bg = Color::Rgb(theme.bg.0, theme.bg.1, theme.bg.2);
+        // Prefer the probed/host RGB; when we never learned the real bg, Reset
+        // so the strip inherits the terminal instead of a wrong cream/dark guess.
+        let underlay_bg = if minimap_gfx::probed_background().is_some()
+            || std::env::var_os("POSIT_EDIT_MINIMAP_BG").is_some()
+        {
+            Color::Rgb(theme.bg.0, theme.bg.1, theme.bg.2)
+        } else {
+            Color::Reset
+        };
         if minimap_gfx::host_is_kitty() {
             // Blank theme strip only — U=1 placeholders are written once after
             // PNG transmit (embedding them in ratatui duplicated/smeared the image).
@@ -8078,6 +8086,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
     let _instance = instance::acquire()?;
     // Crossterm drops every color when NO_COLOR is set. This is a full-screen editor.
     crossterm::style::force_color_output(true);
+    // OSC 10/11 before raw mode so the Kitty minimap fill matches the host bg.
+    minimap_gfx::probe_terminal_colors();
     enable_raw_mode()?;
     ignore_interrupt();
     let _guard = TerminalGuard;

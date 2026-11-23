@@ -153,21 +153,233 @@ impl MinimapTheme {
     }
 }
 
-/// Detect light/dark from host defaults / `COLORFGBG`.
+/// Probed host default colors (OSC 10 / OSC 11), when available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProbedColors {
+    pub fg: (u8, u8, u8),
+    pub bg: (u8, u8, u8),
+}
+
+static PROBED: std::sync::Mutex<Option<ProbedColors>> = std::sync::Mutex::new(None);
+
+/// True when OSC/env probe supplied a real background (not a hard-coded guess).
+pub fn probed_background() -> Option<(u8, u8, u8)> {
+    PROBED
+        .lock()
+        .ok()
+        .and_then(|g| g.map(|c| c.bg))
+        .or_else(env_override_bg)
+}
+
+fn env_override_bg() -> Option<(u8, u8, u8)> {
+    parse_rgb_env("POSIT_EDIT_MINIMAP_BG")
+}
+
+fn env_override_fg() -> Option<(u8, u8, u8)> {
+    parse_rgb_env("POSIT_EDIT_MINIMAP_FG")
+}
+
+/// `POSIT_EDIT_MINIMAP_BG=#rrggbb` or `r,g,b`.
+pub fn parse_rgb_env(key: &str) -> Option<(u8, u8, u8)> {
+    let raw = std::env::var(key).ok()?;
+    parse_rgb_literal(&raw)
+}
+
+pub fn parse_rgb_literal(raw: &str) -> Option<(u8, u8, u8)> {
+    let s = raw.trim();
+    if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            return Some((r, g, b));
+        }
+    }
+    let parts: Vec<_> = s.split([',', ' ']).filter(|p| !p.is_empty()).collect();
+    if parts.len() == 3 {
+        let r: u8 = parts[0].parse().ok()?;
+        let g: u8 = parts[1].parse().ok()?;
+        let b: u8 = parts[2].parse().ok()?;
+        return Some((r, g, b));
+    }
+    None
+}
+
+/// Parse an OSC 10/11 payload (`rgb:RRRR/GGGG/BBBB` or `rgba:…`).
+pub fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
+    let payload = payload.trim();
+    let body = payload
+        .strip_prefix("rgb:")
+        .or_else(|| payload.strip_prefix("rgba:"))?;
+    let mut parts = body.split('/');
+    let r = parse_osc_component(parts.next()?)?;
+    let g = parse_osc_component(parts.next()?)?;
+    let b = parse_osc_component(parts.next()?)?;
+    Some((r, g, b))
+}
+
+fn parse_osc_component(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if s.is_empty() || s.len() > 4 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    Some(match s.len() {
+        1 => (v * 0x11) as u8,
+        2 => v as u8,
+        3 => (v >> 4) as u8,
+        _ => (v >> 8) as u8, // 16-bit channel → 8-bit
+    })
+}
+
+/// Ask the host for default fg/bg via OSC 10/11 before raw mode.
+///
+/// Safe to call more than once; results are cached. No-ops when `/dev/tty` is
+/// missing or the host ignores the query (50ms budget).
+pub fn probe_terminal_colors() {
+    if std::env::var_os("POSIT_EDIT_SKIP_COLOR_PROBE").is_some() {
+        return;
+    }
+    if let (Some(fg), Some(bg)) = (env_override_fg(), env_override_bg()) {
+        let _ = PROBED.lock().map(|mut g| *g = Some(ProbedColors { fg, bg }));
+        return;
+    }
+    let Some(probed) = query_osc_colors_from_tty() else {
+        // Env-only overrides still apply when OSC is silent.
+        if let Some(bg) = env_override_bg() {
+            let fg = env_override_fg().unwrap_or((0x20, 0x20, 0x20));
+            let _ = PROBED.lock().map(|mut g| *g = Some(ProbedColors { fg, bg }));
+        }
+        return;
+    };
+    let mut colors = probed;
+    if let Some(bg) = env_override_bg() {
+        colors.bg = bg;
+    }
+    if let Some(fg) = env_override_fg() {
+        colors.fg = fg;
+    }
+    let _ = PROBED.lock().map(|mut g| *g = Some(colors));
+}
+
+fn query_osc_colors_from_tty() -> Option<ProbedColors> {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+
+    let mut tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+    // Query bg then fg.
+    tty.write_all(b"\x1b]11;?\x1b\\\x1b]10;?\x1b\\").ok()?;
+    let _ = tty.flush();
+
+    let mut buf = Vec::with_capacity(128);
+    let mut tmp = [0u8; 64];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+    let fd = tty.as_raw_fd();
+    while std::time::Instant::now() < deadline {
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let remain = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .min(i32::MAX as u128) as i32;
+        let n = unsafe { libc::poll(&mut pfd, 1, remain.max(1)) };
+        if n <= 0 {
+            break;
+        }
+        match tty.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(2).any(|w| w == b"\x1b\\") || buf.contains(&0x07) {
+                    // Prefer waiting for both answers when they arrive together.
+                    let text = String::from_utf8_lossy(&buf);
+                    if text.matches("rgb:").count() + text.matches("rgba:").count() >= 2 {
+                        break;
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(_) => break,
+        }
+    }
+    parse_osc_color_responses(&buf)
+}
+
+/// Extract OSC 10/11 answers from a raw tty byte stream.
+pub fn parse_osc_color_responses(bytes: &[u8]) -> Option<ProbedColors> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut fg = None;
+    let mut bg = None;
+    for chunk in text.split(['\u{1b}', '\u{7}']) {
+        let chunk = chunk.trim_start_matches(']');
+        let chunk = chunk.trim_end_matches('\\').trim();
+        if let Some(rest) = chunk.strip_prefix("11;") {
+            bg = parse_osc_rgb(rest).or(bg);
+        } else if let Some(rest) = chunk.strip_prefix("10;") {
+            fg = parse_osc_rgb(rest).or(fg);
+        }
+    }
+    // Bg alone is enough to fix the strip; invent a readable fg if needed.
+    let bg = bg?;
+    let fg = fg.unwrap_or(if luminance(bg) >= 128 {
+        (0x1a, 0x1a, 0x1a)
+    } else {
+        (0xd4, 0xd4, 0xd4)
+    });
+    Some(ProbedColors { fg, bg })
+}
+
+fn luminance(bg: (u8, u8, u8)) -> u16 {
+    (u16::from(bg.0) * 3 + u16::from(bg.1) * 4 + u16::from(bg.2)) / 8
+}
+
+/// Detect light/dark from host defaults / `COLORFGBG`, then paint with the
+/// real terminal RGB when OSC 10/11 (or env overrides) answered.
 ///
 /// Ghostty's default UI is light cream, and it often exports `COLORFGBG=15;0`
 /// even on light themes — so Ghostty prefers light unless explicitly dark.
 /// Override with `POSIT_EDIT_THEME=light|dark` when the host lies.
 pub fn terminal_theme() -> MinimapTheme {
-    match std::env::var("POSIT_EDIT_THEME")
+    let probed = PROBED.lock().ok().and_then(|g| *g);
+    let force = std::env::var("POSIT_EDIT_THEME")
         .ok()
-        .map(|v| v.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("light" | "cream" | "day") => return MinimapTheme::light(),
-        Some("dark" | "night") => return MinimapTheme::dark(),
-        _ => {}
+        .map(|v| v.to_ascii_lowercase());
+    let mut theme = match force.as_deref() {
+        Some("light" | "cream" | "day") => MinimapTheme::light(),
+        Some("dark" | "night") => MinimapTheme::dark(),
+        _ => {
+            // Prefer luminance of the real background when we have it.
+            if let Some(colors) = probed {
+                if luminance(colors.bg) >= 128 {
+                    MinimapTheme::light()
+                } else {
+                    MinimapTheme::dark()
+                }
+            } else {
+                guess_theme_without_probe()
+            }
+        }
+    };
+    if let Some(colors) = probed {
+        theme.bg = colors.bg;
+        theme.fg = colors.fg;
+    } else if let Some(bg) = env_override_bg() {
+        theme.bg = bg;
+        if let Some(fg) = env_override_fg() {
+            theme.fg = fg;
+        }
     }
+    theme
+}
+
+fn guess_theme_without_probe() -> MinimapTheme {
     let program = std::env::var("TERM_PROGRAM")
         .unwrap_or_default()
         .to_ascii_lowercase();
@@ -733,11 +945,43 @@ mod tests {
     fn theme_luminance_and_env_override() {
         assert!(MinimapTheme::light().is_light());
         assert!(!MinimapTheme::dark().is_light());
+        let _ = PROBED.lock().map(|mut g| *g = None);
+        std::env::remove_var("POSIT_EDIT_MINIMAP_BG");
+        std::env::remove_var("POSIT_EDIT_MINIMAP_FG");
         std::env::set_var("POSIT_EDIT_THEME", "dark");
         assert!(!terminal_theme().is_light());
         std::env::set_var("POSIT_EDIT_THEME", "light");
         assert!(terminal_theme().is_light());
         std::env::remove_var("POSIT_EDIT_THEME");
+    }
+
+    #[test]
+    fn osc_and_env_rgb_feed_minimap_background() {
+        assert_eq!(
+            parse_osc_rgb("rgb:fafa/f5f5/e6e6"),
+            Some((0xfa, 0xf5, 0xe6))
+        );
+        assert_eq!(parse_osc_rgb("rgb:ab/cd/ef"), Some((0xab, 0xcd, 0xef)));
+        assert_eq!(parse_rgb_literal("#1e1e24"), Some((0x1e, 0x1e, 0x24)));
+        assert_eq!(parse_rgb_literal("10,20,30"), Some((10, 20, 30)));
+        let bytes = b"\x1b]11;rgb:1010/2020/3030\x1b\\\x1b]10;rgb:eeee/eeee/eeee\x1b\\";
+        let probed = parse_osc_color_responses(bytes).expect("osc");
+        assert_eq!(probed.bg, (0x10, 0x20, 0x30));
+        assert_eq!(probed.fg, (0xee, 0xee, 0xee));
+
+        let _ = PROBED.lock().map(|mut g| *g = None);
+        std::env::set_var("POSIT_EDIT_MINIMAP_BG", "#112233");
+        std::env::set_var("POSIT_EDIT_MINIMAP_FG", "#ddeeff");
+        std::env::remove_var("POSIT_EDIT_THEME");
+        // Seed probe via env path used by probe_terminal_colors.
+        probe_terminal_colors();
+        let theme = terminal_theme();
+        assert_eq!(theme.bg, (0x11, 0x22, 0x33));
+        assert_eq!(theme.fg, (0xdd, 0xee, 0xff));
+        assert_eq!(probed_background(), Some((0x11, 0x22, 0x33)));
+        std::env::remove_var("POSIT_EDIT_MINIMAP_BG");
+        std::env::remove_var("POSIT_EDIT_MINIMAP_FG");
+        let _ = PROBED.lock().map(|mut g| *g = None);
     }
 
     #[test]
