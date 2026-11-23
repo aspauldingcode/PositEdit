@@ -670,9 +670,12 @@ fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
 
 /// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
 /// Scale-2 glyphs need room — 1× 5×7 looked like TV static when sampled onto cards.
-pub const FLIP_CARD_W: u32 = 420;
-pub const FLIP_CARD_H: u32 = 280;
+/// AFK: 360×240 (~26% fewer RGB bytes than 420×280) keeps cards legible.
+pub const FLIP_CARD_W: u32 = 360;
+pub const FLIP_CARD_H: u32 = 240;
 pub const FLIP_GLYPH_SCALE: u32 = 2;
+/// Soft cap on cached Flip/minimap preview Arcs (RAM).
+pub const PREVIEW_POOL_CAP: usize = 24;
 
 /// Stable cache key for a buffer strip / Flip card preview.
 pub fn preview_key(slot: usize, revision: u64, theme: u64, width: u32, height: u32) -> u64 {
@@ -743,12 +746,7 @@ impl PreviewPool {
                     let img = render_preview_job(&job);
                     if let Ok(mut map) = cache.lock() {
                         map.insert(key, Arc::new(img));
-                        // Bound memory: keep a modest working set.
-                        if map.len() > 48 {
-                            if let Some(old) = map.keys().next().copied() {
-                                map.remove(&old);
-                            }
-                        }
+                        trim_preview_cache(&mut map);
                     }
                     if let Ok(mut set) = inflight.lock() {
                         set.remove(&key);
@@ -816,6 +814,7 @@ impl PreviewPool {
         let img = Arc::new(render_preview_job(&job));
         if let Ok(mut map) = self.cache.lock() {
             map.insert(key, Arc::clone(&img));
+            trim_preview_cache(&mut map);
         }
         if let Ok(mut set) = self.inflight.lock() {
             set.remove(&key);
@@ -842,6 +841,16 @@ impl PreviewPool {
         }
         if let Ok(mut set) = self.inflight.lock() {
             set.clear();
+        }
+    }
+}
+
+fn trim_preview_cache(map: &mut HashMap<u64, Arc<crate::flip3d::PreviewImage>>) {
+    while map.len() > PREVIEW_POOL_CAP {
+        if let Some(old) = map.keys().next().copied() {
+            map.remove(&old);
+        } else {
+            break;
         }
     }
 }
@@ -979,7 +988,13 @@ mod tests {
     #[test]
     fn flip_preview_uses_double_scale_glyphs() {
         assert!(FLIP_GLYPH_SCALE >= 2, "1× Flip glyphs read as TV static");
-        assert!(FLIP_CARD_W >= 360 && FLIP_CARD_H >= 240);
+        assert_eq!(FLIP_CARD_W, 360);
+        assert_eq!(FLIP_CARD_H, 240);
+        assert!(
+            FLIP_CARD_W * FLIP_CARD_H * 3 < 420 * 280 * 3,
+            "AFK card must stay under the old 420×280 RGB budget"
+        );
+        assert!(PREVIEW_POOL_CAP <= 24);
         let theme = MinimapTheme::light();
         let job = PreviewJob {
             key: 1,

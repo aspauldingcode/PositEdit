@@ -3373,8 +3373,8 @@ impl EditorApp {
         self.editor_minimap_id = None;
         self.editor_minimap_key = None;
         self.flip_tick_at = Some(Instant::now());
-        // Front cards sync; the rest fill on the preview worker (zero-copy Arc).
-        self.warm_flip_previews_sync();
+        // Async only on open — sync raster blocked TabRelease / made Flip feel sticky.
+        self.schedule_flip_previews();
         self.notice = format!(
             "Flip 3D · {}/{} · ←→ choose · release Tab to switch · Esc cancel",
             self.flip.selected + 1,
@@ -3972,7 +3972,8 @@ impl EditorApp {
                 CommandKey::Tab => {}
                 CommandKey::AltTab | CommandKey::Right | CommandKey::Down => {
                     self.flip.flip(1, self.buffers.len());
-                    self.warm_flip_previews_sync();
+                    // Async warm — never block the key path (TabRelease / next arrow).
+                    self.schedule_flip_previews();
                     self.notice = format!(
                         "buffer {}/{} · {}",
                         self.flip.selected + 1,
@@ -3988,7 +3989,7 @@ impl EditorApp {
                 | CommandKey::Up
                 | CommandKey::Backspace => {
                     self.flip.flip(-1, self.buffers.len());
-                    self.warm_flip_previews_sync();
+                    self.schedule_flip_previews();
                     self.notice = format!(
                         "buffer {}/{} · {}",
                         self.flip.selected + 1,
@@ -10080,7 +10081,8 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }
-    app.schedule_flip_previews();
+    // Keys already applied this frame — safe to sync-warm selected neighbours.
+    app.warm_flip_previews_sync();
     let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
     let (tiles, _) = app.content_tiles_and_strip(chrome.content);
     if tiles.width < 8 || tiles.height < 6 {

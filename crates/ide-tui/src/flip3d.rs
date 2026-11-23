@@ -27,8 +27,9 @@ const FRONT_MAX_WIDTH: f32 = 0.5;
 const FRONT_MAX_HEIGHT: f32 = 0.5;
 const CAMERA_FOV_DEGREES: f32 = 28.0;
 /// Cap Kitty scene pixels so flip frames stay cheap (PNG+base64 bound).
-pub const SCENE_MAX_W: u32 = 560;
-pub const SCENE_MAX_H: u32 = 360;
+/// AFK: 480×300 (~28% fewer RGB bytes than 560×360) — still sharp on laptop cells.
+pub const SCENE_MAX_W: u32 = 480;
+pub const SCENE_MAX_H: u32 = 300;
 
 /// Terminal-derived colors for the Flip scene (from OSC/minimap theme).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
