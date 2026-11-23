@@ -337,7 +337,7 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
         ("Left", "focus the previous buffer"),
         ("ll", "search files"),
         ("lll", "live grep"),
-        ("o", "open floating Yazi"),
+        ("o", "open the floating file browser"),
         ("q", "quit when buffers are saved"),
         ("r", "run"),
         ("Right", "focus the next buffer"),
@@ -4662,9 +4662,20 @@ impl EditorApp {
             self.show_output("*workbench*", &scan);
             let hint = match self.language() {
                 "java" | "kotlin" => {
-                    "no Gradle/Maven root found — open the IntelliJ project folder (with build.gradle or pom.xml), or : dlc gradle"
+                    "no Gradle/Maven root — open the folder with build.gradle or pom.xml"
                 }
-                _ => "no build system detected; open the project root or : dlc cargo",
+                "rust" => "no Cargo.toml here — open the crate/workspace root",
+                "nix" => "no flake.nix/shell.nix here — open the Nix project root",
+                "swift" => "no Package.swift / .xcodeproj here — open the SwiftPM or Xcode root",
+                "c" | "objc" | "objective-c" | "objective-cpp" | "objcpp" => {
+                    "no CMakeLists.txt / Makefile / .xcodeproj — open the build root"
+                }
+                "javascript" | "typescript" => {
+                    "no package.json here — open the Node project root"
+                }
+                "zig" => "no build.zig here — open the Zig project root",
+                "python" => "no project markers — open the repo root, or run with r on a .py file",
+                _ => "no build system detected — open the project root (Cargo/Gradle/CMake/…)",
             };
             self.notice = hint.to_string();
             return;
@@ -5143,7 +5154,7 @@ impl EditorApp {
 
     fn open_picked(&mut self, paths: &[PathBuf]) {
         if paths.is_empty() {
-            self.notice = "no file chosen".to_string();
+            self.notice = "no file chosen — o opens the file browser, ll finds by name".into();
             return;
         }
         for path in paths {
@@ -6004,11 +6015,15 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
         ));
     }
     if yazi.items.is_empty() {
-        lines.push(Line::from("(empty)"));
+        lines.push(Line::styled(
+            "empty folder — ← or h goes up, Esc closes",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     Paragraph::new(Text::from(lines)).block(
         Block::default()
-            .title("Yazi")
+            .title("Open")
+            .title_bottom("Enter open · Esc close · h up")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(focus_color(app.editing))),
     )
@@ -6074,7 +6089,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
     }
     if lines.is_empty() {
         lines.push(Line::styled(
-            "empty folder — o opens Yazi, ll finds files",
+            "empty folder — o opens files, ll finds by name",
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -9427,7 +9442,7 @@ mod tests {
         assert!(saw_close);
         assert!(saw_rename);
         assert!(help_text().contains("format the file"));
-        assert!(help_text().contains("open floating Yazi"));
+        assert!(help_text().contains("open the floating file browser"));
         app.pointer(Pointer::Down { column: 1, row: 23 }, 80, 24);
         assert!(!app.help_open());
         app.handle(CommandKey::Help);
@@ -10530,7 +10545,7 @@ mod tests {
         app.note_frame(120, 36);
         app.handle(CommandKey::Char('o'));
         let screen = rendered_at(&app, 120, 36);
-        assert!(screen.contains("Yazi"));
+        assert!(screen.contains("Open") || screen.contains("Enter open"));
         assert!(screen.contains("Posit"));
         assert!(screen.contains("pick-me.txt"));
         let float = yazi_rect(Rect::new(0, 0, 120, 36));
@@ -10583,7 +10598,7 @@ mod tests {
         assert!(guide.contains("key"));
         assert!(guide.contains("action"));
         assert!(guide.contains("format the file"));
-        assert!(guide.contains("open floating Yazi"));
+        assert!(guide.contains("open the floating file browser"));
 
         let mut app = EditorApp::new("plain");
         app.note_frame(220, 40);
@@ -11322,6 +11337,21 @@ mod tests {
 
 
 
+
+
+    #[test]
+    fn file_browser_is_titled_open_not_yazi() {
+        let root = temp_dir("open-title");
+        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+        let mut app = EditorApp::new("x");
+        app.set_workspace(root.clone());
+        app.note_frame(100, 30);
+        app.handle(CommandKey::Char('o'));
+        let screen = rendered_at(&app, 100, 30);
+        assert!(screen.contains("Open"), "{screen}");
+        assert!(!screen.contains("Yazi"), "{screen}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn empty_notifications_explain_themselves() {
