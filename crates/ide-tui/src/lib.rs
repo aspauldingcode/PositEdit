@@ -5792,6 +5792,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         hints_hover,
         app.hover_hints,
         quit_hover,
+        app.minimap_theme.is_light(),
     ))
     .style(
         Style::default()
@@ -5911,7 +5912,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                                     .fg(Color::Cyan)
                                     .add_modifier(Modifier::BOLD)
                             } else {
-                                Style::default().fg(Color::DarkGray)
+                                Style::default().fg(muted_fg(app.minimap_theme.is_light()))
                             },
                         ));
                     }
@@ -6143,7 +6144,7 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
     if yazi.items.is_empty() {
         lines.push(Line::styled(
             "empty folder — ← or h goes up, Esc closes",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted_fg(app.minimap_theme.is_light())),
         ));
     }
     Paragraph::new(Text::from(lines)).block(
@@ -6183,7 +6184,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
                 } else {
                     "no files match — Esc clears the filter"
                 },
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(muted_fg(light)),
             ));
         }
         return Paragraph::new(Text::from(lines)).block(files_block(
@@ -6212,7 +6213,12 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
         if app.tree_focused && index == app.tree_cursor {
             style = style.add_modifier(Modifier::REVERSED);
         } else if tree_hover(app) == Some(index) {
-            style = style.bg(Color::DarkGray);
+            // DarkGray hover wash looks like a hole on cream; use a soft strip.
+            style = style.bg(if app.minimap_theme.is_light() {
+                Color::Rgb(0xe0, 0xdc, 0xcc)
+            } else {
+                Color::DarkGray
+            });
         }
         lines.push(Line::styled(
             tree_label(&entry.name, entry.depth, marker, inner.max(1)),
@@ -6222,7 +6228,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
     if lines.is_empty() {
         lines.push(Line::styled(
             "empty folder — o opens files, ll finds by name",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted_fg(app.minimap_theme.is_light())),
         ));
     }
     let tree = app.tree_rect();
@@ -6287,7 +6293,7 @@ fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
     let draft_style = Style::default().fg(if app.agent_focused {
         focus_color(true)
     } else {
-        Color::Gray
+        muted_fg(app.minimap_theme.is_light())
     });
     lines.extend(
         draft_lines
@@ -6708,7 +6714,7 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
     if lines.len() == 1 {
         lines.push(Line::styled(
             finder_empty_hint(finder.kind, finder.query.is_empty()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted_fg(light)),
         ));
     }
     Paragraph::new(Text::from(lines)).block(
@@ -6851,6 +6857,7 @@ fn paint_tile(
             .flatten(),
         buffer.scroll,
         visible.max(1).saturating_add(1),
+        app.minimap_theme.is_light(),
     );
     let max_x = text
         .lines
@@ -7045,7 +7052,7 @@ fn menu_paragraph(cursor: usize) -> Paragraph<'static> {
     )
 }
 
-fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool) -> Block<'static> {
+fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool, light: bool) -> Block<'static> {
     let mark = |hot: bool| {
         if hot {
             Style::default()
@@ -7064,7 +7071,7 @@ fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool) -> Block<'s
     } else if hints_on {
         mark(false)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(muted_fg(light))
     };
     Block::default()
         .title("Posit")
@@ -7380,6 +7387,7 @@ fn highlighted_window(
     ghost: Option<&Ghost>,
     first_line: usize,
     line_count: usize,
+    light: bool,
 ) -> Text<'static> {
     // Populate caches without cloning the full document / span vec into paint.
     buffer.ensure_highlight_cache();
@@ -7466,7 +7474,7 @@ fn highlighted_window(
                         .take_while(|ch| *ch != '\n')
                         .collect();
                     if let Some(line) = lines.get_mut(local) {
-                        insert_ghost_at(line, col_in_line, &shown);
+                        insert_ghost_at(line, col_in_line, &shown, light);
                     }
                 }
             }
@@ -7497,7 +7505,7 @@ fn display_col_in_line(text: &str, cursor: usize, tab: usize) -> usize {
     col
 }
 
-fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str) {
+fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str, light: bool) {
     let mut flat = String::new();
     let mut styles: Vec<(usize, usize, Style)> = Vec::new();
     for span in &line.spans {
@@ -7506,7 +7514,7 @@ fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str) {
         let end = flat.chars().count();
         styles.push((start, end, span.style));
     }
-    let ghost_style = Style::default().fg(Color::DarkGray);
+    let ghost_style = Style::default().fg(muted_fg(light));
     let mut rebuilt = Vec::new();
     let mut inserted = false;
     for (start, end, span_style) in styles {
@@ -7707,6 +7715,15 @@ fn emit_piece_tabs(
 /// selection colors. No fixed yellow/blue/indexed background.
 fn selection_style(base: Style) -> Style {
     base.add_modifier(Modifier::REVERSED)
+}
+
+/// Dim UI ink — ANSI DarkGray/Gray wash out on Ghostty cream.
+fn muted_fg(light: bool) -> Color {
+    if light {
+        Color::Rgb(0x6e, 0x6a, 0x5e)
+    } else {
+        Color::DarkGray
+    }
 }
 
 fn focus_color(editing: bool) -> Color {
@@ -11221,8 +11238,16 @@ mod tests {
         assert!(app.ghost.as_ref().is_some_and(|ghost| ghost.text == "th"));
         let buffer = app.focused();
         let text = buffer.text();
-        let rendered =
-            super::highlighted_window(buffer, true, true, 80, app.ghost.as_ref(), 0, usize::MAX);
+        let rendered = super::highlighted_window(
+            buffer,
+            true,
+            true,
+            80,
+            app.ghost.as_ref(),
+            0,
+            usize::MAX,
+            app.minimap_theme.is_light(),
+        );
         let line = &rendered.lines[1];
         let flat: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         let caret_col = super::display_col_in_line(&text, buffer.cursor, 4);
@@ -11553,6 +11578,20 @@ mod tests {
             screen.contains("Minimap") || screen.contains("minimap"),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn ghost_and_muted_ink_follow_light_hosts() {
+        assert_eq!(muted_fg(true), Color::Rgb(0x6e, 0x6a, 0x5e));
+        assert_eq!(muted_fg(false), Color::DarkGray);
+        let mut line = Line::from("abc");
+        insert_ghost_at(&mut line, 1, "XX", true);
+        let ghost = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("XX"))
+            .expect("ghost");
+        assert_eq!(ghost.style.fg, Some(Color::Rgb(0x6e, 0x6a, 0x5e)));
     }
 
     #[test]
