@@ -33,7 +33,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen,
 };
 use files::ChooseError;
-use ide_core::{pressure_level, Document, Edit, PressureLevel};
+use ide_core::{pressure_level, Document, Edit, OffsetUnit, PressureLevel};
 use ide_dlc_ui::{authorize, toolbar_hit, Trust, TrustAction, WorkbenchAction, WorkbenchToolbar};
 use ide_local_tab_ui::{TabControl, TabStatus};
 use ide_navigation::{FuzzyHit, GrepHit};
@@ -1019,24 +1019,90 @@ fn parse_line_jump(raw: &str) -> Option<LineJump> {
     None
 }
 
-/// First non-whitespace glyph for each line in a sliding minimap window.
-fn minimap_glyphs_window(buffer: &EditBuffer, start: usize, count: usize) -> Vec<char> {
+/// First non-whitespace glyph (+ editor syntax RGB) for each minimap sample line.
+fn minimap_glyph_cells(
+    buffer: &EditBuffer,
+    start: usize,
+    count: usize,
+    theme: minimap_gfx::MinimapTheme,
+) -> Vec<(char, (u8, u8, u8))> {
     let line_count = buffer.document.len_lines().max(1);
     let count = count.max(1);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let line = start.saturating_add(i);
         if line >= line_count {
-            out.push(' ');
+            out.push((' ', theme.bg));
             continue;
         }
-        let prefix = buffer.document.line_prefix(line, 64);
+        let cells = minimap_colored_line(buffer, line, 64, theme);
         out.push(
-            prefix
-                .chars()
-                .find(|ch| !ch.is_whitespace())
-                .unwrap_or(' '),
+            cells
+                .into_iter()
+                .find(|(ch, _)| !ch.is_whitespace())
+                .unwrap_or((' ', theme.bg)),
         );
+    }
+    out
+}
+
+fn theme_rgb_for_token(theme: minimap_gfx::MinimapTheme, kind: TokenKind) -> (u8, u8, u8) {
+    match kind {
+        TokenKind::Plain => theme.fg,
+        TokenKind::Keyword => theme.keyword,
+        TokenKind::Comment => theme.comment,
+        TokenKind::String => theme.string,
+        TokenKind::Type => theme.ty,
+        TokenKind::Function => theme.function,
+    }
+}
+
+/// Editor-syntax-colored cells for one minimap source line (same TokenKind as paint).
+fn minimap_colored_line(
+    buffer: &EditBuffer,
+    line: usize,
+    max_cols: usize,
+    theme: minimap_gfx::MinimapTheme,
+) -> Vec<(char, (u8, u8, u8))> {
+    let prefix = buffer.document.line_prefix(line, max_cols);
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+    buffer.ensure_highlight_cache();
+    let byte_start = {
+        let ch = buffer.document.line_to_char(line);
+        buffer
+            .document
+            .char_to_unit(ch, OffsetUnit::Utf8)
+            .unwrap_or(0)
+    };
+    let cache = buffer.highlight_cache.borrow();
+    let spans = cache
+        .as_ref()
+        .map(|(_, _, spans)| spans.as_slice())
+        .unwrap_or(&[]);
+    let mut span_i = spans.partition_point(|span| span.end <= byte_start);
+    let mut byte = byte_start;
+    let mut out = Vec::with_capacity(prefix.chars().count());
+    for ch in prefix.chars() {
+        while span_i + 1 < spans.len() && spans[span_i].end <= byte {
+            span_i += 1;
+        }
+        let kind = if span_i < spans.len()
+            && spans[span_i].start <= byte
+            && byte < spans[span_i].end
+        {
+            spans[span_i].kind
+        } else {
+            TokenKind::Plain
+        };
+        let rgb = if ch == ' ' || ch == '\t' {
+            theme.bg
+        } else {
+            theme_rgb_for_token(theme, kind)
+        };
+        out.push((ch, rgb));
+        byte = byte.saturating_add(ch.len_utf8());
     }
     out
 }
@@ -6858,7 +6924,8 @@ fn paint_tile(
                 (inner.height as u32).saturating_mul(minimap_gfx::PX_PER_LINE_BASE),
                 1,
             );
-            let samples = minimap_glyphs_window(buffer, layout.start_line, layout.shown_lines);
+            let samples =
+                minimap_glyph_cells(buffer, layout.start_line, layout.shown_lines, theme);
             let rows = inner.height as usize;
             for row in 0..rows {
                 let src = if layout.shown_lines <= 1 || rows <= 1 {
@@ -6867,18 +6934,19 @@ fn paint_tile(
                     layout.start_line
                         + (row * layout.shown_lines.saturating_sub(1)) / (rows - 1)
                 };
-                let glyph = samples
+                let (raw, (r, g, b)) = samples
                     .get(src.saturating_sub(layout.start_line))
                     .copied()
-                    .unwrap_or('·');
-                let glyph = if glyph.is_whitespace() { '·' } else { glyph };
+                    .unwrap_or(('·', theme.fg));
+                let glyph = if raw.is_whitespace() { '·' } else { raw };
                 let y = inner.y.saturating_add(row as u16);
                 let in_view = src >= buffer.scroll && src < buffer.scroll + visible.max(1);
-                let style = if in_view {
-                    Style::default().fg(Color::Gray).bg(underlay_bg)
+                let fg = if in_view {
+                    Color::Rgb(r, g, b)
                 } else {
-                    Style::default().fg(Color::DarkGray).bg(underlay_bg)
+                    Color::Rgb(r / 2, g / 2, b / 2)
                 };
+                let style = Style::default().fg(fg).bg(underlay_bg);
                 for dx in 0..minimap_w {
                     let cell_ref = &mut screen[(base_x.saturating_add(dx), y)];
                     cell_ref.set_symbol(&glyph.to_string());
@@ -7649,17 +7717,20 @@ fn cursor_style(editing: bool) -> Style {
 }
 
 fn token_style(kind: TokenKind) -> Style {
+    // Forced RGB — identical channels to `minimap_gfx::SYNTAX_*` / MinimapTheme
+    // so Kitty minimap ink matches the editor exactly (no ANSI remapping drift).
+    let rgb = |c: (u8, u8, u8)| Color::Rgb(c.0, c.1, c.2);
     match kind {
         TokenKind::Plain => Style::default(),
         TokenKind::Keyword => Style::default()
-            .fg(Color::Magenta)
+            .fg(rgb(minimap_gfx::SYNTAX_KEYWORD))
             .add_modifier(Modifier::BOLD),
         TokenKind::Comment => Style::default()
-            .fg(Color::Yellow)
+            .fg(rgb(minimap_gfx::SYNTAX_COMMENT))
             .add_modifier(Modifier::ITALIC),
-        TokenKind::String => Style::default().fg(Color::Green),
-        TokenKind::Type => Style::default().fg(Color::Cyan),
-        TokenKind::Function => Style::default().fg(Color::Blue),
+        TokenKind::String => Style::default().fg(rgb(minimap_gfx::SYNTAX_STRING)),
+        TokenKind::Type => Style::default().fg(rgb(minimap_gfx::SYNTAX_TYPE)),
+        TokenKind::Function => Style::default().fg(rgb(minimap_gfx::SYNTAX_FUNCTION)),
     }
 }
 
@@ -8653,6 +8724,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         .max(1)
         .min(max_h);
     let layout = minimap_gfx::layout_proportional(line_count, scroll, visible, px_h, scale);
+    let language = minimap_gfx::language_key(&app.buffers[focus].language);
     let key = minimap_gfx::MinimapPaintKey {
         revision,
         line_count,
@@ -8665,6 +8737,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         px_h,
         scale,
         theme: theme.id,
+        language,
     };
     let dirty = app.editor_minimap_key != Some(key);
     if dirty {
@@ -8676,6 +8749,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
             px_h,
             scale,
             theme: theme.id,
+            language,
         };
         let front = app
             .editor_minimap_id
@@ -8687,7 +8761,7 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         let painted = {
             let mut cache = app.minimap_frame_cache.borrow_mut();
             let rgb = cache.rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
-                app.buffers[focus].document.line_prefix(line, cols)
+                minimap_colored_line(&app.buffers[focus], line, cols, theme)
             });
             canvas::paint_kitty_rgb_swap(
                 &mut stdout(),
@@ -11455,6 +11529,50 @@ mod tests {
         assert!(
             screen.contains("Minimap") || screen.contains("minimap"),
             "{screen}"
+        );
+    }
+
+    #[test]
+    fn minimap_uses_editor_syntax_token_colors() {
+        let mut app = EditorApp::new("fn main() {\n    let x = \"hi\";\n    // note\n}\n");
+        app.set_language("rust");
+        app.note_frame(100, 30);
+        let theme = minimap_gfx::MinimapTheme::dark();
+        let cells = minimap_colored_line(&app.buffers[0], 0, 32, theme);
+        assert!(
+            cells.iter().any(|(ch, rgb)| *ch == 'f' && *rgb == theme.keyword),
+            "fn keyword should use editor keyword RGB, got {cells:?}"
+        );
+        let string_line = minimap_colored_line(&app.buffers[0], 1, 40, theme);
+        assert!(
+            string_line
+                .iter()
+                .any(|(ch, rgb)| *ch == '"' && *rgb == theme.string),
+            "string quotes should use editor string RGB, got {string_line:?}"
+        );
+        let comment_line = minimap_colored_line(&app.buffers[0], 2, 40, theme);
+        assert!(
+            comment_line
+                .iter()
+                .any(|(ch, rgb)| *ch == '/' && *rgb == theme.comment),
+            "comment should use editor comment RGB, got {comment_line:?}"
+        );
+        // Editor token_style forced-RGB must match the shared constants.
+        assert_eq!(
+            token_style(TokenKind::Keyword).fg,
+            Some(Color::Rgb(
+                minimap_gfx::SYNTAX_KEYWORD.0,
+                minimap_gfx::SYNTAX_KEYWORD.1,
+                minimap_gfx::SYNTAX_KEYWORD.2
+            ))
+        );
+        assert_eq!(
+            token_style(TokenKind::String).fg,
+            Some(Color::Rgb(
+                minimap_gfx::SYNTAX_STRING.0,
+                minimap_gfx::SYNTAX_STRING.1,
+                minimap_gfx::SYNTAX_STRING.2
+            ))
         );
     }
 

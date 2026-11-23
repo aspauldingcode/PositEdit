@@ -46,6 +46,8 @@ pub struct MinimapPaintKey {
     pub px_h: u32,
     pub scale: u32,
     pub theme: u8,
+    /// Language id fingerprint so retargeting syntax invalidates the strip.
+    pub language: u64,
 }
 
 /// Content identity without scroll/viewport (base RGB cache).
@@ -58,6 +60,17 @@ pub struct MinimapContentKey {
     pub px_h: u32,
     pub scale: u32,
     pub theme: u8,
+    pub language: u64,
+}
+
+/// Stable fingerprint for minimap cache keys (language string).
+pub fn language_key(language: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in language.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 /// Proportional minimap layout (sliding window + viewport slider).
@@ -71,17 +84,26 @@ pub struct MinimapLayout {
     pub slider_height_px: u32,
 }
 
+/// Shared syntax hues — must stay identical to `token_style` in `lib.rs`
+/// so the Kitty minimap matches the editor 1:1 (forced `Color::Rgb`).
+pub const SYNTAX_KEYWORD: (u8, u8, u8) = (0xc6, 0x78, 0xdd);
+pub const SYNTAX_COMMENT: (u8, u8, u8) = (0xe5, 0xc0, 0x7b);
+pub const SYNTAX_STRING: (u8, u8, u8) = (0x98, 0xc3, 0x79);
+pub const SYNTAX_TYPE: (u8, u8, u8) = (0x56, 0xb6, 0xc2);
+pub const SYNTAX_FUNCTION: (u8, u8, u8) = (0x61, 0xaf, 0xef);
+
 /// Terminal-derived palette for the RGB strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MinimapTheme {
     pub id: u8,
     pub bg: (u8, u8, u8),
+    /// Plain / default text (editor inherits terminal fg; strip uses this).
     pub fg: (u8, u8, u8),
-    pub digit: (u8, u8, u8),
-    pub string: (u8, u8, u8),
-    pub punct: (u8, u8, u8),
+    pub keyword: (u8, u8, u8),
     pub comment: (u8, u8, u8),
-    pub ident: (u8, u8, u8),
+    pub string: (u8, u8, u8),
+    pub ty: (u8, u8, u8),
+    pub function: (u8, u8, u8),
     /// Added to RGB inside the viewport band (can be slightly negative via saturating).
     pub view_delta: i16,
 }
@@ -89,28 +111,28 @@ pub struct MinimapTheme {
 impl MinimapTheme {
     pub fn light() -> Self {
         Self {
-            id: 1,
+            id: 3,
             bg: (250, 245, 230),
             fg: (70, 80, 55),
-            digit: (90, 120, 70),
-            string: (150, 100, 55),
-            punct: (90, 90, 80),
-            comment: (110, 130, 80),
-            ident: (55, 95, 120),
+            keyword: SYNTAX_KEYWORD,
+            comment: SYNTAX_COMMENT,
+            string: SYNTAX_STRING,
+            ty: SYNTAX_TYPE,
+            function: SYNTAX_FUNCTION,
             view_delta: -18,
         }
     }
 
     pub fn dark() -> Self {
         Self {
-            id: 2,
+            id: 4,
             bg: (0x1e, 0x1e, 0x24),
-            fg: (0x80, 0x80, 0x88),
-            digit: (0xb5, 0xce, 0xa8),
-            string: (0xce, 0x91, 0x78),
-            punct: (0xd4, 0xd4, 0xd4),
-            comment: (0x6a, 0x99, 0x55),
-            ident: (0x9c, 0xdc, 0xfe),
+            fg: (0xd4, 0xd4, 0xd4),
+            keyword: SYNTAX_KEYWORD,
+            comment: SYNTAX_COMMENT,
+            string: SYNTAX_STRING,
+            ty: SYNTAX_TYPE,
+            function: SYNTAX_FUNCTION,
             view_delta: 28,
         }
     }
@@ -322,12 +344,15 @@ pub fn line_at_cell_row(
 }
 
 /// Base RGB without viewport tint (cacheable across scroll when window stable).
+///
+/// `line_cells(line, max_cols)` returns `(char, rgb)` using the same syntax
+/// palette as the editor — callers must not invent a second color heuristic.
 pub fn render_base_rgb(
     layout: MinimapLayout,
     img_w: u32,
     img_h: u32,
     theme: MinimapTheme,
-    mut line_prefix: impl FnMut(usize, usize) -> String,
+    mut line_cells: impl FnMut(usize, usize) -> Vec<(char, (u8, u8, u8))>,
 ) -> Vec<u8> {
     let img_w = img_w.max(1);
     let img_h = img_h.max(1);
@@ -340,15 +365,29 @@ pub fn render_base_rgb(
 
     for line_idx in 0..layout.shown_lines {
         let src_line = layout.start_line.saturating_add(line_idx);
-        let prefix = line_prefix(src_line, source_cols);
+        let cells = line_cells(src_line, source_cols);
         let y0 = (line_idx as u32).saturating_mul(px_per_line);
         if y0 >= img_h {
             break;
         }
         let y1 = (y0 + px_per_line).min(img_h);
-        paint_line_chars(&mut rgb, img_w, y0, y1, &prefix, px_per_char, theme);
+        paint_line_cells(&mut rgb, img_w, y0, y1, &cells, px_per_char);
     }
     rgb
+}
+
+/// Test/helper: paint every non-space glyph with `theme.fg` (no syntax).
+pub fn plain_line_cells(prefix: &str, theme: MinimapTheme) -> Vec<(char, (u8, u8, u8))> {
+    prefix
+        .chars()
+        .map(|ch| {
+            if ch == ' ' || ch == '\t' {
+                (ch, theme.bg)
+            } else {
+                (ch, theme.fg)
+            }
+        })
+        .collect()
 }
 
 /// Apply viewport band tint into `out` (reuses caller buffer; no extra alloc).
@@ -409,14 +448,13 @@ fn fill_bg(rgb: &mut [u8], bg: (u8, u8, u8)) {
     }
 }
 
-fn paint_line_chars(
+fn paint_line_cells(
     rgb: &mut [u8],
     img_w: u32,
     y0: u32,
     y1: u32,
-    prefix: &str,
+    cells: &[(char, (u8, u8, u8))],
     px_per_char: u32,
-    theme: MinimapTheme,
 ) {
     let img_w = img_w as usize;
     let cell = px_per_char.max(1);
@@ -425,7 +463,7 @@ fn paint_line_chars(
     // cell is too small to carry a glyph (pressure / tiny strips).
     let use_glyphs = cell >= GLYPH_W && line_h >= GLYPH_H;
     let mut x = 0u32;
-    for ch in prefix.chars() {
+    for &(ch, (r, g, b)) in cells {
         if x as usize >= img_w {
             break;
         }
@@ -433,7 +471,6 @@ fn paint_line_chars(
             x = x.saturating_add(cell);
             continue;
         }
-        let (r, g, b) = sample_color(ch, theme);
         if use_glyphs {
             paint_glyph(rgb, img_w, x, y0, y1, ch, r, g, b);
         } else {
@@ -621,24 +658,6 @@ fn glyph_rows(ch: char) -> Option<&'static [u8; 7]> {
     })
 }
 
-fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
-    match ch {
-        ' ' | '\t' => theme.bg,
-        c if c.is_ascii_digit() => theme.digit,
-        c if matches!(c, '"' | '\'' | '`') => theme.string,
-        c if matches!(
-            c,
-            '(' | ')' | '{' | '}' | '[' | ']' | '<' | '>' | ',' | ';' | ':' | '.'
-        ) =>
-        {
-            theme.punct
-        }
-        c if matches!(c, '/' | '*' | '#' | '-' | '=') => theme.comment,
-        c if c.is_ascii_alphabetic() || c == '_' => theme.ident,
-        _ => theme.fg,
-    }
-}
-
 /// In-memory cache so scroll-only frames skip rope resampling + full fills.
 #[derive(Default)]
 pub struct MinimapFrameCache {
@@ -657,10 +676,10 @@ impl MinimapFrameCache {
         img_w: u32,
         img_h: u32,
         theme: MinimapTheme,
-        line_prefix: impl FnMut(usize, usize) -> String,
+        line_cells: impl FnMut(usize, usize) -> Vec<(char, (u8, u8, u8))>,
     ) -> &[u8] {
         if self.content != Some(content) || self.base_rgb.is_empty() {
-            self.base_rgb = render_base_rgb(layout, img_w, img_h, theme, line_prefix);
+            self.base_rgb = render_base_rgb(layout, img_w, img_h, theme, line_cells);
             self.content = Some(content);
         }
         apply_viewport_tint_into(
@@ -710,8 +729,14 @@ mod tests {
         let mut samples = Vec::new();
         for _ in 0..5 {
             let t0 = std::time::Instant::now();
-            let rgb = render_base_rgb(layout, 96, 400, theme, |line, _| {
-                format!("fn sample_{line}() {{ let x = {line}; }}")
+            let rgb = render_base_rgb(layout, 96, 400, theme, |line, cols| {
+                plain_line_cells(
+                    &format!("fn sample_{line}() {{ let x = {line}; }}"),
+                    theme,
+                )
+                .into_iter()
+                .take(cols)
+                .collect()
             });
             assert_eq!(rgb.len(), 96 * 400 * 3);
             samples.push(t0.elapsed());
@@ -740,7 +765,12 @@ mod tests {
         // File fits the strip → start_line stays 0; only the viewport band moves.
         let layout = layout_proportional(20, 0, 5, 160, 1);
         let theme = MinimapTheme::light();
-        let base = render_base_rgb(layout, 60, 160, theme, |line, _| format!("line{line}"));
+        let base = render_base_rgb(layout, 60, 160, theme, |line, cols| {
+            plain_line_cells(&format!("line{line}"), theme)
+                .into_iter()
+                .take(cols)
+                .collect()
+        });
         let a = apply_viewport_tint(&base, 60, 160, layout, theme);
         let layout2 = layout_proportional(20, 10, 5, 160, 1);
         let b = apply_viewport_tint(&base, 60, 160, layout2, theme);
@@ -775,12 +805,12 @@ mod tests {
         assert_eq!(layout.px_per_char, 6);
         let theme = MinimapTheme::light();
         let rgb = render_base_rgb(layout, 48, 32, theme, |line, _| match line {
-            0 => "A".into(),
-            1 => "fn".into(),
-            _ => String::new(),
+            0 => plain_line_cells("A", theme),
+            1 => plain_line_cells("fn", theme),
+            _ => Vec::new(),
         });
         let bg = theme.bg;
-        let ink = theme.ident;
+        let ink = theme.fg;
         // First glyph cell (0..5) on line 0 must mix bg + ink (holes in 'A').
         let mut bg_n = 0usize;
         let mut ink_n = 0usize;
@@ -825,7 +855,12 @@ mod tests {
         let rgb = render_base_rgb(layout, 180, 320, theme, |line, cols| {
             lines
                 .get(line % lines.len())
-                .map(|s| s.chars().take(cols).collect())
+                .map(|s| {
+                    plain_line_cells(s, theme)
+                        .into_iter()
+                        .take(cols)
+                        .collect()
+                })
                 .unwrap_or_default()
         });
         let tinted = apply_viewport_tint(&rgb, 180, 320, layout, theme);

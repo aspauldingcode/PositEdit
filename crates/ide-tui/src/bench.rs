@@ -259,8 +259,14 @@ fn bench_render() -> bool {
         DEFAULT_WARMUP,
         DEFAULT_SAMPLES,
         || {
-            let rgb = crate::minimap_gfx::render_base_rgb(layout, 96, 400, theme, |line, _| {
-                format!("fn sample_{line}() {{ let x = {line}; }}")
+            let rgb = crate::minimap_gfx::render_base_rgb(layout, 96, 400, theme, |line, cols| {
+                crate::minimap_gfx::plain_line_cells(
+                    &format!("fn sample_{line}() {{ let x = {line}; }}"),
+                    theme,
+                )
+                .into_iter()
+                .take(cols)
+                .collect()
             });
             assert_eq!(rgb.len(), 96 * 400 * 3);
         },
