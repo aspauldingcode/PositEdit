@@ -1,4 +1,4 @@
-//! Terminal editor with scrolling 80-column tiles, a file tree, and Yazi.
+//! Terminal editor with scrolling 80-column tiles, a file tree, and Open browser.
 //! Drawing and commands are testable without a tty.
 //! The interactive loop restores the terminal on return and on drop.
 mod bench;
@@ -11443,6 +11443,21 @@ mod tests {
                 && (app.notice.contains("rr") || app.notice.contains('o')),
             "{}",
             app.notice
+        );
+    }
+
+    #[test]
+    fn empty_console_names_build_and_run() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(100, 30);
+        app.terminals.open = true;
+        app.terminals.show_console = true;
+        app.terminals.console.clear();
+        let screen = rendered_at(&app, 100, 30);
+        assert!(
+            screen.contains("workbench output")
+                && (screen.contains('b') || screen.contains("builds")),
+            "{screen}"
         );
     }
 

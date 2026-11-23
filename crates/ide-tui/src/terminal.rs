@@ -1602,7 +1602,7 @@ impl Panel {
             .saturating_sub(visible.saturating_sub(1));
         let mut lines = Vec::new();
         if self.console.is_empty() {
-            lines.push(Line::from("workbench output appears here"));
+            lines.push(Line::from("workbench output — b builds · r runs · ff formats"));
         } else {
             for line in self.console.iter().skip(start).take(visible) {
                 let clipped: String = line.chars().take(width as usize).collect();
