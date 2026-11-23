@@ -1,0 +1,3 @@
+# Rust + Bend 2
+
+Rust initially owns TUI, terminal graphics, process supervision, DAP/LSP bridges, parser bindings and edit transactions. Candidate Bend 2 pure functions: spatial navigation policy, minimap prioritization, causal graph traversal, change-impact ranking, lens state transition rules, snapshot validation and trace event ordering. For each: language-neutral contract -> Rust baseline -> Bend prototype -> differential fixtures -> proof/property checks -> benchmarks -> gated switchover -> rollback. Do not assume Bend's proof system or FFI without testing installed version. Preserve LAWS.bend and PROOF.bend; add DLC4-specific files without overwriting. A formal proof of a model does not verify external runtime code.

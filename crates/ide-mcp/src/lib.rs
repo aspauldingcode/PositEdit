@@ -91,11 +91,6 @@ pub fn tool_catalog() -> Vec<ToolDescriptor> {
             schema: r#"{"type":"object","properties":{"kind":{"type":"string","enum":["browser","phone","android"]}},"required":["kind"]}"#,
         },
         ToolDescriptor {
-            name: "posit_pointer",
-            description: "Send a mouse pointer event (down|up|move|click) at column/row in the live UI.",
-            schema: r#"{"type":"object","properties":{"kind":{"type":"string","enum":["down","up","move","click"]},"column":{"type":"integer"},"row":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"}}}"#,
-        },
-        ToolDescriptor {
             name: "posit_capture",
             description: "Write a text snapshot under engineering/evidence (or an explicit path inside the workspace).",
             schema: r#"{"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"}}}"#,
@@ -121,7 +116,6 @@ pub fn tool_to_method(tool: &str) -> Option<&'static str> {
         "posit_key" => Some("key"),
         "posit_command" => Some("command"),
         "posit_runtime" => Some("runtime"),
-        "posit_pointer" => Some("pointer"),
         "posit_capture" => Some("capture"),
         _ => None,
     }

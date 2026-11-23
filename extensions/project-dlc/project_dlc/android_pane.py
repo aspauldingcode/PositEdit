@@ -1,47 +1,39 @@
 #!/usr/bin/env python3
 """Headless AVD session for the in-editor Android pane.
 
-Boots at most one emulator with -no-window, then streams a coarse
-screencap preview and recent log lines into the PTY. A second IDE click
-reuses the same pane instead of launching another AVD.
+Boots at most one emulator (windowed on macOS, -no-window elsewhere), then
+streams a coarse screencap preview and recent log lines into the PTY. A second
+IDE click reuses the same pane instead of launching another AVD.
 """
 from __future__ import annotations
 import argparse
-import os
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-
-def find_emulator() -> str | None:
-    found = shutil.which("emulator")
-    if found:
-        return found
-    roots = []
-    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        value = os.environ.get(key)
-        if value:
-            roots.append(Path(value))
-    roots += [Path.home() / "Library" / "Android" / "sdk", Path.home() / "Android" / "Sdk"]
-    for root in roots:
-        candidate = root / "emulator" / "emulator"
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+# Runnable as `python android_pane.py <avd>` (DLC argv) or as a package module.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from android_sdk import emulator_env, find_adb, find_emulator  # noqa: E402
 
 
 def adb() -> str:
-    path = shutil.which("adb")
+    path = find_adb()
     if not path:
-        raise SystemExit("adb is not installed")
+        raise SystemExit(
+            "adb is not installed — set ANDROID_HOME or install platform-tools"
+        )
     return path
 
 
 def devices(tool: str) -> list[str]:
+    env = emulator_env(tool)
     try:
-        out = subprocess.check_output([tool, "devices"], text=True, timeout=10)
+        out = subprocess.check_output(
+            [tool, "devices"], text=True, timeout=10, env=env
+        )
     except (subprocess.SubprocessError, OSError) as exc:
         raise SystemExit(f"adb devices failed: {exc}") from exc
     serials = []
@@ -59,15 +51,28 @@ def ensure_avd(emulator: str, avd: str, tool: str) -> str:
         return emulators[0]
     # On macOS show the real Emulator window so the runtime is visibly functional;
     # Linux CI/headless hosts keep -no-window.
-    args = [emulator, f"@{avd}", "-gpu", "auto", "-no-audio", "-no-boot-anim"]
+    # Always pass -adb-path so Extended Controls does not warn about missing ADB.
+    args = [
+        emulator,
+        f"@{avd}",
+        "-gpu",
+        "auto",
+        "-no-audio",
+        "-no-boot-anim",
+        "-adb-path",
+        tool,
+    ]
     if sys.platform != "darwin":
         args.insert(2, "-no-window")
+    env = emulator_env(tool)
     print(f"starting AVD {avd}…", flush=True)
+    print(f"adb={tool}", flush=True)
     subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+        env=env,
     )
     deadline = time.time() + 120
     while time.time() < deadline:
@@ -81,10 +86,12 @@ def ensure_avd(emulator: str, avd: str, tool: str) -> str:
 
 
 def frame_preview(tool: str, serial: str) -> str:
+    env = emulator_env(tool)
     try:
         raw = subprocess.check_output(
             [tool, "-s", serial, "exec-out", "screencap", "-p"],
             timeout=8,
+            env=env,
         )
     except (subprocess.SubprocessError, OSError) as exc:
         return f"(screencap unavailable: {exc})"
@@ -100,12 +107,14 @@ def frame_preview(tool: str, serial: str) -> str:
 
 
 def recent_log(tool: str, serial: str) -> str:
+    env = emulator_env(tool)
     try:
         out = subprocess.check_output(
             [tool, "-s", serial, "logcat", "-d", "-t", "8", "-v", "brief"],
             text=True,
             timeout=8,
             stderr=subprocess.DEVNULL,
+            env=env,
         )
     except (subprocess.SubprocessError, OSError):
         return ""

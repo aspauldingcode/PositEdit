@@ -21,18 +21,19 @@ class RuntimeCapability:
     native_gpu: str
 
 def _emulator() -> str | None:
-    found=shutil.which('emulator')
-    if found: return found
-    roots=[]
-    for key in ('ANDROID_HOME','ANDROID_SDK_ROOT'):
-        value=os.environ.get(key)
-        if value: roots.append(Path(value))
-    roots += [Path.home()/'Library'/'Android'/'sdk', Path.home()/'Android'/'Sdk']
-    for root in roots:
-        candidate=root/'emulator'/'emulator'
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+    try:
+        from .android_sdk import find_emulator
+    except ImportError:  # script-style import
+        from android_sdk import find_emulator  # type: ignore
+    return find_emulator()
+
+
+def _adb() -> str | None:
+    try:
+        from .android_sdk import find_adb
+    except ImportError:
+        from android_sdk import find_adb  # type: ignore
+    return find_adb()
 
 def _repo_vendor_bin(name: str) -> Path | None:
     """Prefer forked binaries under <repo>/vendor/bin/."""
@@ -118,8 +119,10 @@ def _avd_name(cfg: dict) -> str:
 def _android_pane_argv(avd: str) -> list[str]:
     emulator=_emulator()
     if not emulator: raise CapabilityError('Android emulator is not installed')
-    if not shutil.which('adb'):
-        raise CapabilityError('Install Android platform-tools (adb)')
+    if not _adb():
+        raise CapabilityError(
+            'Install Android platform-tools (adb) under ANDROID_HOME/platform-tools'
+        )
     script=ROOT/'android_pane.py'
     python=shutil.which('python3') or sys_executable()
     return [python,str(script),avd]
@@ -139,7 +142,7 @@ def capabilities() -> list[RuntimeCapability]:
         RuntimeCapability('terminal-browser',browser is not None,'Executable present' if browser else 'Install terminal-browser','in-editor pane','Chromium GPU when supported'),
         RuntimeCapability('terminal-phone',phone is not None and is_mac_arm,'Requires terminal-phone and Apple Silicon macOS with Xcode','in-editor pane','Simulator rendering / device capture'),
         RuntimeCapability('android-emulator',emulator is not None,'Android emulator found' if emulator else 'Install Android emulator and SDK','headless AVD + in-editor pane','HVF on macOS, KVM on Linux if supported'),
-        RuntimeCapability('android-adb',bool(shutil.which('adb')),'Install Android platform-tools','ADB','Physical device GPU'),
+        RuntimeCapability('android-adb',_adb() is not None,'Install Android platform-tools under ANDROID_HOME','ADB','Physical device GPU'),
         RuntimeCapability('xtool',bool(shutil.which('xtool')),'Install and configure xtool with authorized toolchain','Native CLI','Physical Apple device GPU'),
     ]
 
@@ -171,7 +174,10 @@ def runtime_plan(kind: str, root: Path, cfg: dict) -> Plan:
             argv=_android_pane_argv(avd)
         except CapabilityError:
             emulator=_emulator() or 'emulator'
+            adb=_adb()
             argv=[emulator,'@'+avd,'-no-window','-gpu','auto']
+            if adb:
+                argv += ['-adb-path', adb]
         return Plan('android','boot',str(root),argv,
                     'One headless AVD with an in-editor screencap pane')
     if kind == 'android-install':
@@ -180,7 +186,8 @@ def runtime_plan(kind: str, root: Path, cfg: dict) -> Plan:
             raise CapabilityError('Configure android_serial from adb devices')
         if not isinstance(apk,str) or not (root/apk).resolve().is_relative_to(root) or not (root/apk).is_file():
             raise CapabilityError('android_apk must name an existing workspace file')
-        return Plan('android','install',str(root),['adb','-s',serial,'install','-r',str((root/apk).resolve())],
+        adb=_adb() or 'adb'
+        return Plan('android','install',str(root),[adb,'-s',serial,'install','-r',str((root/apk).resolve())],
                     'ADB install to explicitly selected device; requires authorized device')
     if kind == 'android-launch':
         serial,bundle=cfg.get('android_serial'),cfg.get('android_package')
@@ -188,7 +195,8 @@ def runtime_plan(kind: str, root: Path, cfg: dict) -> Plan:
             raise CapabilityError('Configure android_serial')
         if not isinstance(bundle,str) or not re.fullmatch(r'[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+',bundle):
             raise CapabilityError('Configure android_package')
-        return Plan('android','launch',str(root),['adb','-s',serial,'shell','monkey','-p',bundle,'1'],
+        adb=_adb() or 'adb'
+        return Plan('android','launch',str(root),[adb,'-s',serial,'shell','monkey','-p',bundle,'1'],
                     'ADB launches app; ensure device is authorized')
     if kind == 'xtool-dev':
         return Plan('apple-linux','develop',str(root),['xtool','dev'],

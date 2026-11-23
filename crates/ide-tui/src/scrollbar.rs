@@ -82,14 +82,13 @@ impl ScrollMetrics {
 
 /// Track + thumb palette.
 ///
-/// Eighth-block glyphs (`▄`/`▀`/…) composite as: filled = `thumb` fg, empty =
-/// **track** (not pane `bg` / Reset). Otherwise partial thumbs wash into the
-/// editor and stop reading as one scrollbar.
+/// Eighth-block caps (`▄`/`▀`/…) use `thumb` as fg and **`track` as bg** so the
+/// unfilled part of the cell matches the sidebar track — never pane `Reset`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScrollColors {
     pub track: Color,
     pub thumb: Color,
-    /// Pane behind the idle `│` rail (usually Reset).
+    /// Reserved (pane underlay); paint uses `track` for cell backgrounds.
     pub bg: Color,
 }
 
@@ -111,17 +110,130 @@ impl ScrollColors {
         }
     }
 
-    #[allow(dead_code)] // public API for MCP / external themed callers
     pub fn from_env() -> Self {
-        // Luminance — never `theme.id == …` (ids move; that silently forced dark).
         Self::for_theme(crate::minimap_gfx::terminal_theme().is_light())
     }
 }
 
 /// Paint a 1-column scrollbar with sub-cell thumb edges.
-#[allow(dead_code)] // thin wrapper; UI prefers `paint_with` + live minimap theme
 pub fn paint(buf: &mut Buffer, area: Rect, metrics: ScrollMetrics) {
     paint_with(buf, area, metrics, ScrollColors::from_env());
+}
+
+/// Horizontal track along the bottom of `area` (window-management strip).
+/// Same eighth-cell precision as the vertical scrollbar, mapped left→right.
+pub fn paint_horizontal(buf: &mut Buffer, area: Rect, metrics: ScrollMetrics) {
+    paint_horizontal_with(buf, area, metrics, ScrollColors::from_env());
+}
+
+pub fn paint_horizontal_with(
+    buf: &mut Buffer,
+    area: Rect,
+    metrics: ScrollMetrics,
+    colors: ScrollColors,
+) {
+    if area.height == 0 || area.width < 2 {
+        return;
+    }
+    let y = area.y.saturating_add(area.height.saturating_sub(1));
+    let track_x = area.x;
+    let track_w = area.width;
+    let track_style = Style::default().fg(colors.track).bg(colors.track);
+    let thumb_style = Style::default().fg(colors.thumb).bg(colors.track);
+    for col in 0..track_w {
+        let cell = &mut buf[(track_x.saturating_add(col), y)];
+        cell.set_symbol("█");
+        cell.set_style(track_style);
+    }
+    let Some(fine) = metrics.fine_thumb(track_w) else {
+        // Still show per-buffer tick marks when everything fits.
+        paint_buffer_ticks(buf, track_x, y, track_w, metrics.total, colors);
+        return;
+    };
+    let thumb_end = fine.top_units.saturating_add(fine.thumb_units);
+    for col in 0..track_w as usize {
+        let cell_lo = col.saturating_mul(SUBDIV);
+        let cell_hi = cell_lo.saturating_add(SUBDIV);
+        let cover_lo = fine.top_units.max(cell_lo);
+        let cover_hi = thumb_end.min(cell_hi);
+        if cover_hi <= cover_lo {
+            continue;
+        }
+        let from = (cover_lo - cell_lo) as u8;
+        let to = (cover_hi - cell_lo) as u8;
+        let glyph = eighth_glyph_horizontal(from, to);
+        let cell = &mut buf[(track_x.saturating_add(col as u16), y)];
+        cell.set_symbol(glyph);
+        cell.set_style(thumb_style);
+    }
+    paint_buffer_ticks(buf, track_x, y, track_w, metrics.total, colors);
+}
+
+fn paint_buffer_ticks(
+    buf: &mut Buffer,
+    track_x: u16,
+    y: u16,
+    track_w: u16,
+    total: usize,
+    colors: ScrollColors,
+) {
+    let total = total.max(1);
+    if total <= 1 || track_w < 2 {
+        return;
+    }
+    let tick = Style::default().fg(colors.thumb).bg(colors.track);
+    for i in 1..total {
+        let x = track_x.saturating_add(((i * track_w as usize) / total) as u16);
+        if x >= track_x.saturating_add(track_w) {
+            continue;
+        }
+        let cell = &mut buf[(x, y)];
+        // Keep thumb fill; only stamp a tick on pure track cells.
+        if cell.symbol() == "█" && cell.fg == colors.track {
+            cell.set_symbol("┆");
+            cell.set_style(tick);
+        }
+    }
+}
+
+/// Horizontal eighth-range `[from, to)` within one cell (0=left … 8=right).
+fn eighth_glyph_horizontal(from: u8, to: u8) -> &'static str {
+    let from = from.min(8);
+    let to = to.min(8).max(from);
+    if from == 0 && to == 8 {
+        return "█";
+    }
+    if from == 0 {
+        return match to {
+            1 => "▏",
+            2 => "▎",
+            3 => "▍",
+            4 => "▌",
+            5 => "▋",
+            6 => "▊",
+            7 => "▉",
+            _ => "█",
+        };
+    }
+    if to == 8 {
+        return match from {
+            1 => "▉",
+            2 => "▊",
+            3 => "▋",
+            4 => "▐",
+            5 => "▕",
+            6 => "▕",
+            7 => "▕",
+            _ => "█",
+        };
+    }
+    let span = to.saturating_sub(from);
+    match span {
+        0 => "│",
+        1 | 2 => "▎",
+        3 | 4 => "▌",
+        _ => "█",
+    }
 }
 
 /// Paint with an explicit palette (tests / themed callers).
@@ -132,13 +244,14 @@ pub fn paint_with(buf: &mut Buffer, area: Rect, metrics: ScrollMetrics, colors: 
     let x = area.x.saturating_add(area.width.saturating_sub(1));
     let track_y = area.y;
     let track_h = area.height;
-    // Idle rail sits on the pane (`bg`). Partial Unicode blocks use thumb fg
-    // over **track** so empty eighths stay scrollbar-colored, not editor wash.
-    let track_style = Style::default().fg(colors.track).bg(colors.bg);
+    // Partial Unicode blocks use fg for the filled eighths and bg for the rest.
+    // That bg **must** be the track color (same as the sidebar column) — never
+    // Reset/pane bg — or the thumb's top/bottom caps look like a different bar.
+    let track_style = Style::default().fg(colors.track).bg(colors.track);
     let thumb_style = Style::default().fg(colors.thumb).bg(colors.track);
     for row in 0..track_h {
         let cell = &mut buf[(x, track_y.saturating_add(row))];
-        cell.set_symbol("│");
+        cell.set_symbol("█");
         cell.set_style(track_style);
     }
     let Some(fine) = metrics.fine_thumb(track_h) else {
@@ -259,8 +372,30 @@ mod tests {
     }
 
     #[test]
+    fn horizontal_thumb_uses_left_right_eighths() {
+        assert_eq!(eighth_glyph_horizontal(0, 8), "█");
+        assert_eq!(eighth_glyph_horizontal(0, 4), "▌");
+        assert_eq!(eighth_glyph_horizontal(4, 8), "▐");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+        let metrics = ScrollMetrics {
+            offset: 2,
+            visible: 1,
+            total: 5,
+        };
+        paint_horizontal_with(
+            &mut buf,
+            Rect::new(0, 0, 40, 1),
+            metrics,
+            ScrollColors::for_theme(false),
+        );
+        let fine = metrics.fine_thumb(40).expect("fine");
+        assert!(fine.thumb_units >= 1);
+        assert!(fine.top_units > 0);
+    }
+
+    #[test]
     fn eighth_glyphs_share_track_background() {
-        // Sub-cell caps composite against the track — not pane Reset.
+        // Sub-cell caps must composite against the track color (sidebar match).
         let light = ScrollColors::for_theme(true);
         let dark = ScrollColors::for_theme(false);
         assert_eq!(light.track, Color::Rgb(176, 174, 155));
@@ -281,29 +416,15 @@ mod tests {
         let cell = &buf[(1, top_row)];
         assert_eq!(
             cell.bg, light.track,
-            "thumb eighth empty must be track, got {:?}",
-            cell.bg
+            "thumb cap bg must be track color, not pane Reset"
         );
         assert_eq!(cell.fg, light.thumb);
-        // Idle rail rows keep pane bg behind the │.
+        // Track-only rows are a solid track column (same as sidebar).
         let track_row = if top_row > 0 { 0 } else { 11 };
         let track = &buf[(1, track_row)];
-        if track.symbol() == "│" {
-            assert_eq!(track.bg, light.bg);
-            assert_eq!(track.fg, light.track);
-        }
-    }
-
-    #[test]
-    fn scrollbar_theme_follows_minimap_luminance_not_id() {
-        assert!(crate::minimap_gfx::MinimapTheme::light().is_light());
-        assert!(!crate::minimap_gfx::MinimapTheme::dark().is_light());
-        // Regression: light theme id moved off `1`; id==1 checks forced dark scrollbars.
-        assert_ne!(crate::minimap_gfx::MinimapTheme::light().id, 1);
-        let light = ScrollColors::for_theme(crate::minimap_gfx::MinimapTheme::light().is_light());
-        let dark = ScrollColors::for_theme(crate::minimap_gfx::MinimapTheme::dark().is_light());
-        assert_eq!(light.track, Color::Rgb(176, 174, 155));
-        assert_eq!(dark.track, Color::DarkGray);
+        assert_eq!(track.symbol(), "█");
+        assert_eq!(track.bg, light.track);
+        assert_eq!(track.fg, light.track);
     }
 
     /// Exact vectors from `bend/scroll/LAWS.bend`.

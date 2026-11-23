@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DLC4 spatial message",
+  "type": "object",
+  "required": [
+    "version",
+    "kind",
+    "workspace_id",
+    "revision",
+    "payload"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "overview",
+        "pane_relation",
+        "source_anchor",
+        "lens",
+        "snapshot",
+        "impact",
+        "probe",
+        "trace",
+        "output_block",
+        "graphics_surface"
+      ]
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "type": "object"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

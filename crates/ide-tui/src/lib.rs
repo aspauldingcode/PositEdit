@@ -1,21 +1,27 @@
-//! Terminal editor with scrolling 80-column tiles, a file tree, and Open browser.
+//! Terminal editor with scrolling 80-column tiles, a file tree, and Yazi.
 //! Drawing and commands are testable without a tty.
 //! The interactive loop restores the terminal on return and on drop.
 mod bench;
 mod clipboard;
 mod files;
 mod finder;
+mod flip3d;
+mod fold;
 mod graphics;
 mod gutter;
 mod instance;
+mod seams;
 mod layout;
 mod canvas;
+mod edocview;
+mod markdown_preview;
 mod control;
 mod local_tab;
 mod minimap_gfx;
 mod palette;
 mod scheduler;
 mod scrollbar;
+mod term_palette;
 mod terminal;
 
 use std::cell::{Cell, RefCell};
@@ -25,7 +31,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -33,12 +40,12 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen,
 };
 use files::ChooseError;
-use ide_core::{pressure_level, Document, Edit, OffsetUnit, PressureLevel};
+use ide_core::{pressure_level, Document, Edit, PressureLevel};
 use ide_dlc_ui::{authorize, toolbar_hit, Trust, TrustAction, WorkbenchAction, WorkbenchToolbar};
 use ide_local_tab_ui::{TabControl, TabStatus};
 use ide_navigation::{FuzzyHit, GrepHit};
 use ide_spatial::{
-    LensKind, PaneKind, PreviewKind, SpatialAction, SpatialCapabilities, SpatialContext,
+    LensKind, PaneKind, SpatialAction, SpatialCapabilities, SpatialContext,
     SpatialMode, SpatialOutcome, SpatialOverview, SpatialSession, StructuralOp,
 };
 use ide_syntax::{
@@ -73,6 +80,8 @@ struct EditBuffer {
     highlight_cache: RefCell<Option<(u64, String, Vec<Span>)>>,
     /// Cached max line width for horizontal scroll limits.
     width_cache: RefCell<Option<(u64, usize)>>,
+    /// Code-fold ranges + collapsed set (LSP preferred when injected).
+    folds: RefCell<fold::FoldState>,
 }
 
 pub struct EditorApp {
@@ -92,6 +101,14 @@ pub struct EditorApp {
     notice: String,
     help: bool,
     help_scroll: usize,
+    /// edocview retained Help document (PDF pages → Kitty crop).
+    help_doc: Option<edocview::RetainedDoc>,
+    /// edocview retained Markdown Canvas preview.
+    markdown_doc: Option<edocview::RetainedDoc>,
+    /// Force text Help when Kitty/PDF pipeline fails.
+    help_force_text: bool,
+    /// Force text Markdown Canvas when Kitty/PDF pipeline fails.
+    markdown_force_text: bool,
     tree_focused: bool,
     tree_cursor: usize,
     tree_scroll: usize,
@@ -138,6 +155,8 @@ pub struct EditorApp {
     terminal_side_drag: bool,
     /// Dragging the Canvas left seam (width only; Kitty paint deferred until release).
     canvas_resize: bool,
+    /// Kitty/markdown graphics were hidden for the in-progress canvas drag.
+    canvas_resize_hid_gfx: bool,
     /// Ratatui Clear+chrome for Canvas — skip while only the editor scrolled.
     canvas_chrome_dirty: Cell<bool>,
     /// Set when Canvas cells were Cleared and Kitty placeholders must be rebound.
@@ -154,38 +173,52 @@ pub struct EditorApp {
     hover_hint: Option<String>,
     /// When false, mouse hover never shows the yellow action tooltip.
     hover_hints: bool,
+    /// Open the Welcome markdown buffer (+ Canvas preview) on empty startup.
+    show_welcome: bool,
+    /// Allow Kitty graphics (minimap / Canvas / Flip / docs). Off → text fallbacks.
+    kitty_graphics: bool,
+    /// Scroll offset for the Canvas markdown preview.
+    markdown_preview_scroll: u16,
     spatial: SpatialSession,
     graphics: graphics::GraphicsArbiter,
     spatial_cursor: usize,
     spatial_lines: Vec<String>,
-    /// Full `zl` outline before filter; empty outside Symbols lens.
-    spatial_outline: Vec<(usize, String)>,
-    /// Incremental filter while the Symbols lens is open.
-    spatial_filter: String,
     /// Active Canvas tab kind (`browser` / `phone` / `android`). `None` = closed.
     runtime_dock: Option<String>,
     runtime_focused: bool,
     runtime_width: Option<u16>,
-    /// When true, keep the last Canvas frame; skip new Kitty uploads (edit stays snappy).
-    canvas_frozen: bool,
     /// Open Canvas surfaces (one per runtime). Active tab = `runtime_dock`.
     canvas_surfaces: Vec<canvas::CanvasSurface>,
+    /// Last good PNG per (kind, target) for instant reopen / tab reuse.
+    canvas_frame_cache: canvas::FrameCache,
     /// Last time we probed OS memory pressure / trimmed history.
     memory_pressure_at: Option<Instant>,
     last_pressure: PressureLevel,
     gutter: gutter::GutterState,
     /// Dragging the editor minimap or scrollbar (document scroll).
     edge_drag: Option<EdgeDrag>,
-    /// User preference: show the focused-editor minimap strip when width allows.
-    minimap_on: bool,
     /// Last Kitty RGB minimap upload key (revision/scroll/size).
     editor_minimap_key: Option<minimap_gfx::MinimapPaintKey>,
     /// Kitty image id bound to the editor minimap placeholders.
     editor_minimap_id: Option<u32>,
     /// Base-RGB cache (scroll-only frames skip rope resampling).
     minimap_frame_cache: RefCell<minimap_gfx::MinimapFrameCache>,
-    /// Terminal-derived minimap palette (light/dark).
+    /// Headless Flip/minimap syntax previews (background thread, Arc-shared).
+    preview_pool: minimap_gfx::PreviewPool,
+    /// Terminal-derived minimap palette (OSC fingerprint; refreshes live).
     minimap_theme: minimap_gfx::MinimapTheme,
+    /// Last successful OSC palette probe (throttle live reloads).
+    minimap_theme_probed_at: Option<Instant>,
+    /// Force a palette re-probe on next present (focus / scheme change).
+    minimap_theme_dirty: bool,
+    /// ShojiWM Flip 3D buffer cycler.
+    flip: flip3d::FlipSwitcher,
+    /// Last Flip 3D tick (easing).
+    flip_tick_at: Option<Instant>,
+    /// Dragging the window-management strip under the editor.
+    buffer_strip_drag: bool,
+    /// Async edocview raster engine (never blocks the UI thread).
+    preview_engine: edocview::PreviewEngine,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,203 +244,59 @@ enum CanvasControlHit {
     BrowserReload,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Ghost {
     revision: u64,
+    /// Caret position where the ghost is shown.
     cursor: usize,
+    /// When set, Tab replaces `[replace_from, cursor)` with `text` (snippets).
+    replace_from: Option<usize>,
     text: String,
 }
 
-const HELP_INTRO: &str = "\
-How to use Posit Edit
+/// Startup welcome buffer — title is `# Welcome`; body is a short tutorial.
+const WELCOME_MARKDOWN: &str = r#"# Welcome
 
-Posit IDE is this terminal editor.
-The yellow ? in the title bar opens and closes this guide.
-The h beside it toggles mouse hover hints. The q quits.
-Click any of them, or the ? help label on the status line.
-F1 opens this guide. Esc closes it. h toggles hover hints.
+Posit Edit is a minimal terminal IDE. This buffer is Markdown — styled in place, with a live preview on the right Canvas.
 
-Buffers
-  Fullscreen is the default: one buffer fills the editor. Opening a file
-  switches to that buffer instead of splitting the window.
-  f or Ctrl-W turns on tiling. Then a wide screen lays files left to right.
-  Columns cap at 80 once enough files are open to fill the width.
-  80 columns or less: one buffer, as wide as the window.
-  81 to 160: two columns, when two files are open.
-  161 to 240: three columns. Wider windows add another every 80.
-  Fewer open files grow to fill the window instead of leaving empty space.
-  Files beyond the visible columns stay on the strip. Focus scrolls to them.
-  Drag the border between buffers to widen one when a line runs past the edge.
+## Essentials
 
-  When the screen is taller than it is wide, files stack from top to bottom
-  and use the full width. A terminal cell is about twice as tall as it is wide,
-  so this follows the window, not the raw row count.
-  Left and right move between buffers. Up and down scroll the file.
-  Those keys do not trade jobs when the files are stacked.
+| Key | Action |
+| --- | --- |
+| `Enter` / `e` | start editing |
+| `Esc` | leave edit (view mode) |
+| `;` | settings |
+| `Ctrl-P` | command palette |
+| `t` | terminal |
+| `<` / `>` | file tree / agent |
+| `?` | help |
 
-Editing
-  The editor starts in view mode. Letters run commands.
-  Enter or e starts editing at the caret. E edits after the caret.
-  H edits at the first non-blank on the line. L edits at the line end.
-  (Same placements as Neovim i / a / I / A — clearer keys, Vim letters stay put.)
-  Esc returns to view mode.
-  Left gutter: click ● for breakpoints, the git stripe for diff detail,
-  numbers to jump.
-  rn toggles relative line numbers. Palette :42 / :+10 / :-5 jumps lines.
-  Right edge: Kitty code minimap when Ghostty/kitty can draw it (glyph
-  fallback otherwise). The minimap stays on the focused editor even when the
-  file fits. :minimap (or Settings → m) toggles it. Text scrollbars use
-  eighth-block thumbs and appear only when the file needs motion. Click or
-  drag either to scroll. On Kitty the minimap replaces the text scrollbar.
-  Click a panel to focus it. Only one of editor, terminal, agent, or file tree
-  has the keyboard at a time. Hover cyan means click to focus.
-  Click places the cursor. Drag selects. Double-click selects a word.
-  Triple-click selects the line. Shift+arrows select while editing.
+## Files & buffers
 
-Canvas (Browser / Phone)
-  Keys 6 and 7 open Browser and Phone on the right Canvas (Kitty graphics).
-  Frames double-buffer so the last picture stays up until the next is ready.
-  :freeze holds the last frame so editing stays snappy; :thaw resumes.
-  The bottom strip is the real controls: phone Home / Lock / Siri, or
-  browser Back / Fwd / Reload (plus the page URL). Click those buttons.
-  Ctrl-H / Ctrl-L / Ctrl-S also fire phone Home / Lock / Siri while focused.
-  Clicks on the preview map into terminal-phone / agent-browser.
-  Ctrl-A selects all. In view mode, a does too.
-  y copies the selection. p pastes. x cuts. Right-click opens the same actions
-  and never clears the selection. Terminal text selects the same way.
-  A second letter extends a bind. Wait, and the short bind runs.
+- `o` opens a file browser · `s` saves · `n` new buffer
+- `Right` / `Left` (view) switch buffers
+- Drag to select · `y` copy · `p` paste · `x` cut
 
-Sidebars
-  < opens and closes the file tree. > opens and closes the agent chat.
-  Both are view-mode keys. Drag the inner edge of a sidebar to resize it.
-  Deep folders keep the file name visible instead of indenting it away.
+## Terminal
 
-Terminal
-  t opens and closes the terminal. It always sits on the bottom of the screen.
-  Drag its top edge to change the height.
-  Sessions are a list on the right, including debug. Hover a row to select it.
-  Drag the bright divider before that list to resize it. x on a row closes it.
-  + adds a shell. exit closes that session. Esc returns to the editor.
-  Ctrl-C goes to the focused session and does not quit Posit Edit.
+Focus the terminal pane (click it or open with `t`). **Tab** there is shell completion, not Posit Edit ghost text.
 
-Closing
-  w closes the focused buffer. The w on a buffer does the same.
-  q quits. The q in the title bar does the same.
-  A modified buffer asks first: y closes, ! saves and closes, n cancels.
-  Quit asks the same way: y quits, ! saves all and quits, n cancels.
+## Canvas preview
 
-Notifications
-  Errors collect at the bottom right. i, or the badge, opens and closes them.
-";
+Markdown opens a **Preview** tab on the right. Browser / Phone use keys `6` / `7`. Close with the Canvas `x`.
 
-fn keybind_rows() -> Vec<(&'static str, &'static str)> {
-    let mut rows = vec![
-        (";", "open settings"),
-        (":", "open the command line"),
-        (":freeze", "freeze Canvas on the last frame"),
-        (":thaw", "resume live Canvas frames"),
-        (":minimap", "toggle the editor minimap"),
-        ("?", "open this guide"),
-        ("h", "toggle mouse hover hints"),
-        ("[", "focus the first buffer"),
-        ("]", "focus the last buffer"),
-        ("{", "move this buffer to the start"),
-        ("}", "move this buffer to the end"),
-        ("b", "build"),
-        ("a", "select all"),
-        ("<", "toggle the file sidebar"),
-        (">", "toggle the agent chat"),
-        ("Ctrl-A", "select all"),
-        ("Ctrl-Down", "scroll the file"),
-        ("Ctrl-Left", "focus the previous buffer"),
-        ("Ctrl-P", "open the command line"),
-        ("Ctrl-Q", "quit"),
-        ("Ctrl-Right", "focus the next buffer"),
-        ("Ctrl-S", "save"),
-        ("Ctrl-Up", "scroll the file"),
-        ("Ctrl-W", "toggle fullscreen"),
-        ("Ctrl-Z", "undo the last edit"),
-        ("Down", "scroll the file"),
-        ("e", "edit at the caret (nvim i)"),
-        ("E", "edit after the caret (nvim a)"),
-        ("Enter", "enter editing on the focused buffer"),
-        ("Esc", "leave editing and return to view mode"),
-        ("f", "toggle fullscreen"),
-        ("ff", "format the file"),
-        ("F1", "open this guide"),
-        ("H", "edit at first non-blank on the line (nvim I)"),
-        ("i", "toggle notifications"),
-        ("L", "edit at end of line (nvim A)"),
-        ("rn", "toggle relative line numbers"),
-        (":42", "palette: jump to line 42"),
-        (":+10 / :-5", "palette: relative line jump"),
-        ("l", "search open buffers"),
-        ("Left", "focus the previous buffer"),
-        ("ll", "search files"),
-        ("lll", "live grep"),
-        ("o", "open the floating file browser"),
-        ("q", "quit when buffers are saved"),
-        ("r", "run"),
-        ("Right", "focus the next buffer"),
-        ("rr", "rename the file"),
-        ("s", "save"),
-        ("t", "toggle the terminal"),
-        ("Ctrl-Alt-T", "toggle local Tab completion"),
-        ("zo", "spatial overview"),
-        ("zl", "symbols outline — type to filter · Enter jumps"),
-        ("zn", "structural edit preview"),
-        ("zt", "execution timeline"),
-        ("zi", "change impact"),
-        ("zp", "rich preview"),
-        (
-            "Tab",
-            "edit buffers only: accept ghost / indent — terminal pane uses shell Tab",
-        ),
-        ("Esc", "dismiss ghost text before leaving edit mode"),
-        ("Shift-Down", "view: jump down 8 lines. edit: select down"),
-        (
-            "Shift-Left",
-            "view: swap with the previous buffer. edit: select left",
-        ),
-        (
-            "Shift-Right",
-            "view: swap with the next buffer. edit: select right",
-        ),
-        ("Shift-Up", "view: jump up 8 lines. edit: select up"),
-        (
-            "Option-Left",
-            "jump left by word (Alt-Left / Meta-b on other terminals)",
-        ),
-        (
-            "Option-Right",
-            "jump right by word (Alt-Right / Meta-f on other terminals)",
-        ),
-        (
-            "Option-Shift-Left",
-            "select left by word",
-        ),
-        (
-            "Option-Shift-Right",
-            "select right by word",
-        ),
-        ("Up", "scroll the file"),
-        ("w", "close the buffer"),
-        ("x", "cut the selection"),
-        ("y", "copy the selection"),
-        ("p", "paste"),
-        ("1", "preview a build plan"),
-        ("2", "preview a run plan"),
-        ("3", "show the workbench configuration"),
-        ("4", "preview a test plan"),
-        ("5", "refresh detected projects"),
-        ("6", "open Browser on the Canvas (Kitty graphics)"),
-        ("7", "open Phone on the Canvas (Kitty graphics)"),
-        ("8", "open Android on the Canvas"),
-        ("9", "report debugger availability"),
-    ];
-    rows.sort_by_key(|left| bind_order(left.0));
-    rows
-}
+## Settings tip
+
+`;` → toggle **welcome** off if you do not want this buffer on startup.
+
+*Happy editing.*
+"#;
+
+/// Kitty image id base for fullscreen Help (edocview pages use base..base+n).
+const HELP_KITTY_IMAGE_ID: u32 = 43;
+const FLIP3D_KITTY_IMAGE_ID: u32 = flip3d::FLIP3D_KITTY_IMAGE_ID;
+/// Kitty image id base for Markdown Canvas preview pages.
+const MARKDOWN_KITTY_IMAGE_ID: u32 = 80;
 
 fn bind_order(bind: &str) -> (u8, String) {
     let lower = bind.to_ascii_lowercase();
@@ -420,14 +309,271 @@ fn bind_order(bind: &str) -> (u8, String) {
     (group, lower)
 }
 
-fn help_text() -> String {
-    let mut text = String::from(HELP_INTRO);
-    text.push_str("\nKeybinds\n\n");
-    text.push_str(&format!("{:<13}{}\n", "key", "action"));
-    for (key, action) in keybind_rows() {
-        text.push_str(&format!("{key:<13}{action}\n"));
+fn sorted_binds(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = rows
+        .iter()
+        .map(|(k, a)| ((*k).to_string(), (*a).to_string()))
+        .collect();
+    out.sort_by(|a, b| bind_order(&a.0).cmp(&bind_order(&b.0)));
+    out
+}
+
+fn push_bind_table(out: &mut String, title: &str, rows: &[(&str, &str)]) {
+    out.push_str("## ");
+    out.push_str(title);
+    out.push_str("\n\n");
+    out.push_str("| Key | Action |\n");
+    out.push_str("| --- | --- |\n");
+    for (key, action) in sorted_binds(rows) {
+        out.push_str(&format!("| `{key}` | {action} |\n"));
     }
+    out.push('\n');
+}
+
+/// Full Help document (Markdown). Keybinds are tables, grouped by what they do.
+/// Resolve the shipped Posit Edit icon for Help / docs (Liquid Glass preview PNG).
+fn help_icon_path() -> Option<PathBuf> {
+    if let Ok(override_path) = std::env::var("POSIT_EDIT_ICON") {
+        let path = PathBuf::from(override_path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let candidates = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/posit-edit.png"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../share/posit-edit/icons/posit-edit.png"),
+    ];
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn help_markdown() -> String {
+    let mut text = String::from("# Help\n\n");
+    if let Some(icon) = help_icon_path() {
+        // Absolute path so pandoc/edocview can resolve the asset from a temp staging dir.
+        text.push_str(&format!(
+            "![Posit Edit]({}){{width=160}}\n\n",
+            icon.display()
+        ));
+    }
+    text.push_str(
+        "Posit Edit is this terminal IDE. The yellow **?** in the title bar opens and closes this guide. \
+**h** toggles mouse hover hints. **q** quits. Click any of them, or the `? help` label on the status line. \
+**F1** opens this guide. **Esc** closes it.\n\n\
+---\n\n\
+## How it works\n\n\
+### Buffers\n\n\
+Fullscreen is the default: one buffer fills the editor. Opening a file switches to that buffer \
+instead of splitting.\n\n\
+**f** / **Ctrl-W** turns on tiling. Wide screens lay files left to right.\n\n\
+Columns cap at **80 columns** once enough files fill the width.\n\n\
+Fewer open files grow to fill space. Files beyond the visible columns stay on the strip; focus \
+scrolls to them. Drag a buffer's **right-edge** pill to widen only that buffer \
+(niri-style — neighbours keep their widths, including the last buffer).\n\n\
+When the screen is taller than wide, files stack top to bottom at full width. **Left** / **Right** \
+move between buffers; **Up** / **Down** scroll the file.\n\n\
+### Editing\n\n\
+View mode first — letters run commands. **Enter** / **e** edit at the caret; **E** after the caret; \
+**H** at first non-blank; **L** at line end (Neovim **i** / **a** / **I** / **A** placements). \
+**Esc** returns to view. Gutter: ● for breakpoints, numbers to jump. **rn** relative line numbers. \
+Palette `:42` / `:+10` / `:-5` jumps. Right edge: code minimap + scrollbar. Only one pane owns the \
+keyboard; hover cyan means click to focus. Click places the caret; drag selects; double-click a word; \
+triple-click a line; Shift+arrows select while editing.\n\n\
+### Canvas\n\n\
+**6** / **7** open Browser / Phone on the right Canvas. Markdown opens a **Preview** tab. The bottom \
+strip is real chrome (phone Home / Lock / Siri, browser Back / Fwd / Reload). Clicks map into the \
+runtime. **y** / **p** / **x** copy / paste / cut; right-click keeps the selection.\n\n\
+### Sidebars & terminal\n\n\
+**<** file tree · **>** agent chat · drag mid-edge split pills (or the highlighted edge) to resize. **t** toggles the bottom terminal; \
+drag its top edge for height. Session list on the right (including debug).\n\n\
+### Flip 3D buffer switcher\n\n\
+In **view mode** (not editing), **press and hold Tab** to open the ShojiWM-style stack (needs **2+ buffers**). It starts on the **current** buffer — hold+release alone keeps you there. **←→ / ↑↓** choose another buffer · **release Tab** (or Enter) switches · **Esc** cancels. View-mode **gs** is a fallback when the terminal does not report key-up. Kitty hosts pre-render syntax cards in the background.\n\n\
+### Closing\n\n\
+**w** closes the focused buffer. **q** quits. Dirty buffers ask first: **y** closes, **!** saves and \
+closes, **n** cancels. **i** toggles notifications.\n\n\
+---\n\n\
+# Keybinds\n\n",
+    );
+
+    push_bind_table(
+        &mut text,
+        "Guide & settings",
+        &[
+            ("?", "open this guide"),
+            ("F1", "open this guide"),
+            ("h", "toggle mouse hover hints"),
+            (";", "open settings (welcome, Kitty graphics, sidebars, …)"),
+            ("k", "settings: toggle Kitty graphics (text fallbacks)"),
+            (":", "open the command line"),
+            ("Ctrl-P", "open the command line"),
+            ("i", "toggle notifications"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Editing mode",
+        &[
+            ("Enter", "enter editing on the focused buffer"),
+            ("e", "edit at the caret (nvim i)"),
+            ("E", "edit after the caret (nvim a)"),
+            ("H", "edit at first non-blank on the line (nvim I)"),
+            ("L", "edit at end of line (nvim A)"),
+            ("Esc", "leave editing / dismiss ghost text"),
+            ("Tab", "accept ghost text, or indent when none is shown"),
+            ("Ctrl-Z", "undo the last edit"),
+            ("Ctrl-Alt-T", "toggle local Tab completion"),
+            ("ff", "format the file"),
+            ("rn", "toggle relative line numbers"),
+            (":42", "palette: jump to line 42"),
+            (":+10 / :-5", "palette: relative line jump"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Motion & selection",
+        &[
+            ("Up", "scroll the file"),
+            ("Down", "scroll the file"),
+            ("Ctrl-Up", "scroll the file"),
+            ("Ctrl-Down", "scroll the file"),
+            ("Shift-Up", "view: jump up 8 lines. edit: select up"),
+            ("Shift-Down", "view: jump down 8 lines. edit: select down"),
+            ("Shift-Left", "view: swap with the previous buffer. edit: select left"),
+            ("Shift-Right", "view: swap with the next buffer. edit: select right"),
+            ("Option-Left", "jump left by word (Alt-Left / Meta-b)"),
+            ("Option-Right", "jump right by word (Alt-Right / Meta-f)"),
+            ("Option-Shift-Left", "select left by word"),
+            ("Option-Shift-Right", "select right by word"),
+            ("a", "select all"),
+            ("Ctrl-A", "select all"),
+            ("y", "copy the selection"),
+            ("p", "paste"),
+            ("x", "cut the selection"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Buffers & layout",
+        &[
+            ("Left", "focus the previous buffer"),
+            ("Right", "focus the next buffer"),
+            ("Ctrl-Left", "focus the previous buffer"),
+            ("Ctrl-Right", "focus the next buffer"),
+            ("[", "focus the first buffer"),
+            ("]", "focus the last buffer"),
+            ("{", "move this buffer to the start"),
+            ("}", "move this buffer to the end"),
+            ("f", "toggle fullscreen / split (niri-style edge drag)"),
+            ("Ctrl-W", "toggle fullscreen"),
+            ("hold Tab", "Flip 3D (current buffer · ←→ choose · release switches)"),
+            ("gs", "Flip 3D fallback when key-up is unavailable"),
+            ("buffer strip", "bottom precision scrollbar · click to focus"),
+            (
+                "right-edge pill",
+                "drag to resize only that buffer (last buffer included)",
+            ),
+            ("w", "close the buffer"),
+            ("s", "save"),
+            ("Ctrl-S", "save"),
+            ("rr", "rename the file"),
+            ("o", "open floating Yazi"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Search",
+        &[
+            ("l", "search open buffers"),
+            ("ll", "search files"),
+            ("lll", "live grep"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Sidebars & terminal",
+        &[
+            ("<", "toggle the file sidebar"),
+            (">", "toggle the agent chat"),
+            ("t", "toggle the terminal"),
+            (
+                "split pills",
+                "drag mid-edge handles: tree / chat / canvas / terminal / buffer right edges",
+            ),
+            (
+                "agent",
+                "routes Claude/Codex/OpenCode/agent, or FreeLocal tools: list/read/grep/format",
+            ),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Canvas & runtimes",
+        &[
+            ("zp", "markdown preview on the Canvas"),
+            ("6", "open Browser on the Canvas (Kitty graphics)"),
+            ("7", "open Phone on the Canvas (Kitty graphics)"),
+            ("8", "open Android on the Canvas"),
+            ("9", "report debugger availability"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Build, run & workbench",
+        &[
+            ("b", "build"),
+            ("r", "run"),
+            ("1", "preview a build plan"),
+            ("2", "preview a run plan"),
+            ("3", "show the workbench configuration"),
+            ("4", "preview a test plan"),
+            ("5", "refresh detected projects"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Spatial",
+        &[
+            ("za", "toggle fold at caret (gutter ▸/▾)"),
+            ("zc", "close fold at caret"),
+            ("ze", "expand fold at caret"),
+            ("zo", "spatial overview"),
+            ("zl", "ephemeral lens"),
+            ("zn", "structural edit preview"),
+            ("zt", "execution timeline"),
+            ("zi", "change impact"),
+        ],
+    );
+    push_bind_table(
+        &mut text,
+        "Quit",
+        &[
+            ("q", "quit when buffers are saved"),
+            ("Ctrl-Q", "quit"),
+        ],
+    );
     text
+}
+
+#[cfg(test)]
+fn help_text() -> String {
+    help_markdown()
+}
+
+#[cfg(test)]
+fn keybind_rows() -> Vec<(&'static str, &'static str)> {
+    // Flat sample used by alphabetical-order tests; Help UI reads `help_markdown()`.
+    let mut rows = vec![
+        ("<", "toggle the file sidebar"),
+        (">", "toggle the agent chat"),
+        ("?", "open this guide"),
+        ("b", "build"),
+        ("ff", "format the file"),
+        ("l", "search open buffers"),
+        ("ll", "search files"),
+        ("lll", "live grep"),
+        ("o", "open floating Yazi"),
+    ];
+    rows.sort_by_key(|left| bind_order(left.0));
+    rows
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -484,9 +630,14 @@ pub enum CommandKey {
     AltRight,
     AltShiftLeft,
     AltShiftRight,
+    /// ShojiWM-style buffer cycler (Alt+Tab when the host forwards it).
+    AltTab,
+    AltShiftTab,
     Esc,
     Help,
     Tab,
+    /// Tab key-up — commits Flip 3D after a hold in view mode.
+    TabRelease,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,6 +669,8 @@ struct MenuState {
     x: u16,
     y: u16,
     cursor: usize,
+    /// Right-click landed on the Terminal/Console panel.
+    over_terminal: bool,
 }
 
 const MENU: &[(&str, char)] = &[
@@ -583,6 +736,68 @@ impl EditBuffer {
             highlight_cache: RefCell::new(None),
             // (revision, max line width) — avoids O(n) on every horizontal scroll.
             width_cache: RefCell::new(None),
+            folds: RefCell::new(fold::FoldState::default()),
+        }
+    }
+
+    fn ensure_folds(&self) {
+        let rev = self.document.revision();
+        let text = self.text();
+        self.folds.borrow_mut().refresh(&text, rev);
+    }
+
+    /// Prefer LSP folding ranges when a server replied; `None` falls back to syntax.
+    fn apply_lsp_fold_result(&mut self, result: &serde_json::Value) {
+        let ranges = fold::ranges_from_lsp_json(result);
+        self.folds.borrow_mut().set_lsp_ranges(if ranges.is_empty() {
+            None
+        } else {
+            Some(ranges)
+        });
+        self.ensure_folds();
+    }
+
+    fn fold_toggle_at_caret(&mut self) -> String {
+        self.ensure_folds();
+        let line = self.document.char_to_line(self.cursor);
+        let (chevron, end_line) = {
+            let mut folds = self.folds.borrow_mut();
+            let end = folds.range_at(line).map(|r| r.end_line + 1).unwrap_or(line + 1);
+            (folds.toggle_at(line), end)
+        };
+        match chevron {
+            Some(fold::Chevron::Collapsed) => {
+                // Keep caret on the fold header when body collapses.
+                let col = self.with_text(|body| line_col(body, self.cursor).1);
+                self.cursor = self.with_text(|body| char_at(body, line, col));
+                self.anchor = self.cursor;
+                format!("folded lines {}-{end_line}", line + 1)
+            }
+            Some(fold::Chevron::Expanded) => format!("unfolded line {}", line + 1),
+            None => "no fold at caret".into(),
+        }
+    }
+
+    fn fold_close_at_caret(&mut self) -> String {
+        self.ensure_folds();
+        let line = self.document.char_to_line(self.cursor);
+        if self.folds.borrow_mut().close_at(line) {
+            let col = self.with_text(|body| line_col(body, self.cursor).1);
+            self.cursor = self.with_text(|body| char_at(body, line, col));
+            self.anchor = self.cursor;
+            format!("folded line {}", line + 1)
+        } else {
+            "no fold at caret".into()
+        }
+    }
+
+    fn fold_open_at_caret(&mut self) -> String {
+        self.ensure_folds();
+        let line = self.document.char_to_line(self.cursor);
+        if self.folds.borrow_mut().open_at(line) {
+            format!("unfolded near line {}", line + 1)
+        } else {
+            "no fold at caret".into()
         }
     }
 
@@ -1027,166 +1242,24 @@ fn parse_line_jump(raw: &str) -> Option<LineJump> {
     None
 }
 
-/// Lightweight buffer outline for `zl` — no LSP required.
-fn outline_symbols(text: &str) -> Vec<(usize, String)> {
-    const KINDS: &[(&str, &str)] = &[
-        ("fn ", "fn"),
-        ("def ", "def"),
-        ("struct ", "struct"),
-        ("enum ", "enum"),
-        ("trait ", "trait"),
-        ("impl ", "impl"),
-        ("class ", "class"),
-        ("interface ", "interface"),
-        ("type ", "type"),
-        ("func ", "func"),
-        ("function ", "function"),
-        ("mod ", "mod"),
-    ];
-    let mut out = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("//")
-            || trimmed.starts_with('#')
-            || trimmed.starts_with("/*")
-        {
-            continue;
-        }
-        let mut body = trimmed;
-        for prefix in [
-            "pub(crate) ",
-            "pub ",
-            "async ",
-            "export ",
-            "static ",
-            "private ",
-            "protected ",
-            "public ",
-        ] {
-            if let Some(rest) = body.strip_prefix(prefix) {
-                body = rest;
-            }
-        }
-        for &(prefix, label) in KINDS {
-            let Some(rest) = body.strip_prefix(prefix) else {
-                continue;
-            };
-            let name = rest
-                .split(|ch: char| {
-                    ch == '(' || ch == '{' || ch == '<' || ch == ':' || ch == '!' || ch.is_whitespace()
-                })
-                .next()
-                .unwrap_or("")
-                .trim();
-            if name.is_empty() && label != "impl" {
-                break;
-            }
-            let shown = if name.is_empty() {
-                format!("{label} …")
-            } else {
-                format!("{label} {name}")
-            };
-            out.push((index + 1, shown));
-            break;
-        }
-        if out.len() >= 200 {
-            break;
-        }
-    }
-    out
-}
-
-fn parse_outline_line(row: &str) -> Option<usize> {
-    let token = row.split_whitespace().next()?;
-    let line: usize = token.parse().ok()?;
-    (line >= 1).then_some(line)
-}
-
-/// First non-whitespace glyph (+ editor syntax RGB) for each minimap sample line.
-fn minimap_glyph_cells(
-    buffer: &EditBuffer,
-    start: usize,
-    count: usize,
-    theme: minimap_gfx::MinimapTheme,
-) -> Vec<(char, (u8, u8, u8))> {
+/// First non-whitespace glyph for each line in a sliding minimap window.
+fn minimap_glyphs_window(buffer: &EditBuffer, start: usize, count: usize) -> Vec<char> {
     let line_count = buffer.document.len_lines().max(1);
     let count = count.max(1);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let line = start.saturating_add(i);
         if line >= line_count {
-            out.push((' ', theme.bg));
+            out.push(' ');
             continue;
         }
-        let cells = minimap_colored_line(buffer, line, 64, theme);
+        let prefix = buffer.document.line_prefix(line, 64);
         out.push(
-            cells
-                .into_iter()
-                .find(|(ch, _)| !ch.is_whitespace())
-                .unwrap_or((' ', theme.bg)),
+            prefix
+                .chars()
+                .find(|ch| !ch.is_whitespace())
+                .unwrap_or(' '),
         );
-    }
-    out
-}
-
-fn theme_rgb_for_token(theme: minimap_gfx::MinimapTheme, kind: TokenKind) -> (u8, u8, u8) {
-    match kind {
-        TokenKind::Plain => theme.fg,
-        TokenKind::Keyword => theme.keyword,
-        TokenKind::Comment => theme.comment,
-        TokenKind::String => theme.string,
-        TokenKind::Type => theme.ty,
-        TokenKind::Function => theme.function,
-    }
-}
-
-/// Editor-syntax-colored cells for one minimap source line (same TokenKind as paint).
-fn minimap_colored_line(
-    buffer: &EditBuffer,
-    line: usize,
-    max_cols: usize,
-    theme: minimap_gfx::MinimapTheme,
-) -> Vec<(char, (u8, u8, u8))> {
-    let prefix = buffer.document.line_prefix(line, max_cols);
-    if prefix.is_empty() {
-        return Vec::new();
-    }
-    buffer.ensure_highlight_cache();
-    let byte_start = {
-        let ch = buffer.document.line_to_char(line);
-        buffer
-            .document
-            .char_to_unit(ch, OffsetUnit::Utf8)
-            .unwrap_or(0)
-    };
-    let cache = buffer.highlight_cache.borrow();
-    let spans = cache
-        .as_ref()
-        .map(|(_, _, spans)| spans.as_slice())
-        .unwrap_or(&[]);
-    let mut span_i = spans.partition_point(|span| span.end <= byte_start);
-    let mut byte = byte_start;
-    let mut out = Vec::with_capacity(prefix.chars().count());
-    for ch in prefix.chars() {
-        while span_i + 1 < spans.len() && spans[span_i].end <= byte {
-            span_i += 1;
-        }
-        let kind = if span_i < spans.len()
-            && spans[span_i].start <= byte
-            && byte < spans[span_i].end
-        {
-            spans[span_i].kind
-        } else {
-            TokenKind::Plain
-        };
-        let rgb = if ch == ' ' || ch == '\t' {
-            theme.bg
-        } else {
-            theme_rgb_for_token(theme, kind)
-        };
-        out.push((ch, rgb));
-        byte = byte.saturating_add(ch.len_utf8());
     }
     out
 }
@@ -1213,6 +1286,10 @@ impl EditorApp {
             notice: String::new(),
             help: false,
             help_scroll: 0,
+            help_doc: None,
+            markdown_doc: None,
+            help_force_text: false,
+            markdown_force_text: false,
             tree_focused: false,
             tree_cursor: 0,
             tree_scroll: 0,
@@ -1235,22 +1312,10 @@ impl EditorApp {
             resize: None,
             agent_focused: false,
             agent_draft: String::new(),
-            agent_log: {
-                let program = agent_program();
-                let mut lines = vec![
-                    "Ask for a change to the focused file.".to_string(),
-                    "Tools stay inside this workspace.".to_string(),
-                ];
-                if program.is_empty() {
-                    lines.push(
-                        "No agent CLI on PATH — set IDE_AGENT or install claude/codex/agent."
-                            .into(),
-                    );
-                } else {
-                    lines.push(format!("Using {program} (override with IDE_AGENT)."));
-                }
-                lines
-            },
+            agent_log: vec![
+                "Ask for a change to the focused file.".to_string(),
+                "Tools stay inside this workspace.".to_string(),
+            ],
             agent_program: agent_program(),
             overlay: Overlay::None,
             chord: String::new(),
@@ -1271,6 +1336,7 @@ impl EditorApp {
             terminal_drag: false,
             terminal_side_drag: false,
             canvas_resize: false,
+            canvas_resize_hid_gfx: false,
             canvas_chrome_dirty: Cell::new(true),
             canvas_placeholders_stale: Cell::new(false),
             canvas_painted_size: None,
@@ -1282,6 +1348,13 @@ impl EditorApp {
             hover_since: None,
             hover_hint: None,
             hover_hints: true,
+            show_welcome: load_show_welcome(&workspace),
+            kitty_graphics: {
+                let on = load_kitty_graphics(&workspace);
+                graphics::set_kitty_allowed(on);
+                on
+            },
+            markdown_preview_scroll: 0,
             spatial: SpatialSession::new(SpatialCapabilities {
                 tree_sitter: true,
                 ..SpatialCapabilities::default()
@@ -1289,22 +1362,26 @@ impl EditorApp {
             graphics: graphics::GraphicsArbiter::default(),
             spatial_cursor: 0,
             spatial_lines: Vec::new(),
-            spatial_outline: Vec::new(),
-            spatial_filter: String::new(),
             runtime_dock: None,
             runtime_focused: false,
             runtime_width: None,
-            canvas_frozen: false,
             canvas_surfaces: Vec::new(),
+            canvas_frame_cache: canvas::FrameCache::default(),
             memory_pressure_at: None,
             last_pressure: PressureLevel::Normal,
             gutter: gutter::GutterState::default(),
             edge_drag: None,
-            minimap_on: true,
             editor_minimap_key: None,
             editor_minimap_id: None,
             minimap_frame_cache: RefCell::new(minimap_gfx::MinimapFrameCache::default()),
+            preview_pool: minimap_gfx::PreviewPool::new(),
             minimap_theme: minimap_gfx::terminal_theme(),
+            minimap_theme_probed_at: None,
+            minimap_theme_dirty: true,
+            flip: flip3d::FlipSwitcher::default(),
+            flip_tick_at: None,
+            buffer_strip_drag: false,
+            preview_engine: edocview::PreviewEngine::default(),
         };
         app.reload_tree();
         app.bootstrap_workbench();
@@ -1330,16 +1407,9 @@ impl EditorApp {
         }
     }
 
-    /// Local Tab completion is editor-edit only — never the terminal pane.
-    fn tab_completion_active(&self) -> bool {
-        self.tab_enabled
-            && self.editing
-            && matches!(self.pane_focus(), PaneFocus::Editor)
-    }
-
     fn refresh_ghost(&mut self) {
         self.ghost = None;
-        if !self.tab_completion_active() {
+        if !self.tab_enabled || !self.editing {
             return;
         }
         let cursor = self.focused().cursor;
@@ -1368,22 +1438,46 @@ impl EditorApp {
             }
         }
         let suggestion = local_tab::suggest(&prefix, &suffix, &context);
-        if suggestion.is_empty() {
+        if !suggestion.is_empty() {
+            let revision = self.focused().document.revision();
+            self.ghost = Some(Ghost {
+                revision,
+                cursor,
+                replace_from: None,
+                text: suggestion,
+            });
             return;
         }
-        let revision = self.focused().document.revision();
-        self.ghost = Some(Ghost {
-            revision,
-            cursor,
-            text: suggestion,
-        });
+        // Snippet trigger: exact language trigger at the caret word.
+        let word = prefix
+            .chars()
+            .rev()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        if let Some(snippet) = ide_syntax::match_trigger(&self.focused().language, &word) {
+            let (expanded, _) = ide_syntax::expand_snippet(snippet.body);
+            let revision = self.focused().document.revision();
+            let start = cursor.saturating_sub(word.chars().count());
+            // When the expansion begins with the trigger, insert only the remainder so the
+            // ghost paints after the caret without doubling the keyword.
+            let (text, replace_from) = if expanded.starts_with(&word) {
+                (expanded[word.len()..].to_string(), None)
+            } else {
+                (expanded, Some(start))
+            };
+            self.ghost = Some(Ghost {
+                revision,
+                cursor,
+                replace_from,
+                text,
+            });
+        }
     }
 
     fn accept_ghost(&mut self) -> bool {
-        if !self.tab_completion_active() {
-            self.ghost = None;
-            return false;
-        }
         let Some(ghost) = self.ghost.clone() else {
             return false;
         };
@@ -1395,10 +1489,12 @@ impl EditorApp {
         if !fresh {
             return false;
         }
+        let start = ghost.replace_from.unwrap_or(ghost.cursor);
+        let end = ghost.cursor;
         let added = ghost.text.chars().count();
         let edit = Edit {
-            start: ghost.cursor,
-            end: ghost.cursor,
+            start,
+            end,
             replacement: ghost.text,
         };
         if self
@@ -1410,7 +1506,7 @@ impl EditorApp {
             return false;
         }
         let buffer = self.focused_mut();
-        buffer.cursor = ghost.cursor + added;
+        buffer.cursor = start + added;
         buffer.anchor = buffer.cursor;
         buffer.selection = None;
         true
@@ -1424,12 +1520,6 @@ impl EditorApp {
             let body = format!("{{\"enabled\":{}}}\n", self.tab_enabled);
             let _ = std::fs::write(dir.join("local-tab.json"), body);
         }
-        self.notice = if self.tab_enabled {
-            "Tab completion on (edit buffers only) — lexical until a local model is installed"
-                .into()
-        } else {
-            "Tab completion off — Ctrl-Alt-T to enable".into()
-        };
     }
 
     fn set_hover(&mut self, column: u16, row: u16) {
@@ -1525,14 +1615,6 @@ impl EditorApp {
             .is_some_and(|(column, row)| contains(rect, column, row))
     }
 
-    fn resize_hot(&self, side: Side) -> bool {
-        let Some((column, row)) = self.hover else {
-            return false;
-        };
-        let chrome = self.frame_chrome(Rect::new(0, 0, self.width, self.height));
-        self.seam(&chrome, column, row) == Some(side)
-    }
-
     fn sidebar_title_hot(&self) -> bool {
         let Some((column, row)) = self.hover else {
             return false;
@@ -1568,7 +1650,7 @@ impl EditorApp {
             return false;
         }
         if shift {
-            self.overlay = Overlay::Settings;
+            self.open_settings();
         } else {
             self.toggle_tab();
         }
@@ -1597,18 +1679,6 @@ impl EditorApp {
 
     pub fn workspace_path(&self) -> &Path {
         &self.workspace
-    }
-
-    pub fn relative_line_numbers(&self) -> bool {
-        self.gutter.relative_numbers
-    }
-
-    pub fn minimap_enabled(&self) -> bool {
-        self.minimap_on
-    }
-
-    pub fn canvas_is_frozen(&self) -> bool {
-        self.canvas_frozen
     }
 
     pub fn is_editing(&self) -> bool {
@@ -1648,8 +1718,132 @@ impl EditorApp {
             "browser" => "Browser",
             "phone" => "Phone",
             "android" => "Android",
+            "markdown" => "Preview",
             _ => "Canvas",
         }
+    }
+
+    fn open_welcome_buffer(&mut self) {
+        self.buffers = vec![EditBuffer::from_text("welcome", WELCOME_MARKDOWN, "markdown")];
+        self.focus = 0;
+        self.open_markdown_preview();
+        self.notice = "welcome — Preview on the right · ; settings to hide on startup".into();
+    }
+
+    fn open_markdown_preview(&mut self) {
+        if !self.canvas_surfaces.iter().any(|surface| surface.kind == "markdown") {
+            self.canvas_surfaces
+                .push(canvas::CanvasSurface::text_pane("markdown", "preview"));
+        }
+        self.runtime_dock = Some("markdown".into());
+        self.markdown_preview_scroll = 0;
+        self.markdown_force_text = false;
+        // Keep any warm retained pages; engine will replace when fingerprint changes.
+        // Text fallback paints immediately — Kitty never blocks open.
+        self.canvas_chrome_dirty.set(true);
+        self.canvas_painted_size = None;
+        self.canvas_image_id = None;
+        self.notice = "preview · rendering in background…".into();
+        self.schedule_markdown_raster(edocview::RASTER_DEBOUNCE);
+    }
+
+    fn schedule_markdown_raster(&mut self, debounce: Duration) {
+        if self.markdown_force_text || cfg!(test) {
+            return;
+        }
+        if !edocview::kitty_doc_available() {
+            return;
+        }
+        let chrome = self.frame_chrome(Rect::new(0, 0, self.width.max(1), self.height.max(1)));
+        if chrome.canvas.width < 4 {
+            return;
+        }
+        let inner = canvas_media_rect(chrome.canvas);
+        let cols = inner.width.saturating_sub(0).max(1);
+        let (cell_w, cell_h) = edocview::cell_pixels(self.width, self.height, self.pixels);
+        let source = self.markdown_preview_source();
+        self.preview_engine.request(
+            edocview::PreviewSlot::Markdown,
+            &source,
+            &self.workspace,
+            cols,
+            cell_w,
+            cell_h,
+            MARKDOWN_KITTY_IMAGE_ID,
+            debounce,
+        );
+    }
+
+    fn schedule_help_raster(&mut self, debounce: Duration) {
+        if self.help_force_text || cfg!(test) {
+            return;
+        }
+        if !edocview::kitty_doc_available() {
+            return;
+        }
+        let area = Rect::new(0, 0, self.width.max(1), self.height.max(1));
+        let cols = area.width.saturating_sub(2).max(1);
+        let (cell_w, cell_h) = edocview::cell_pixels(self.width, self.height, self.pixels);
+        self.preview_engine.request(
+            edocview::PreviewSlot::Help,
+            &help_markdown(),
+            &self.workspace,
+            cols,
+            cell_w,
+            cell_h,
+            HELP_KITTY_IMAGE_ID,
+            debounce,
+        );
+    }
+
+    fn toggle_show_welcome(&mut self) {
+        self.show_welcome = !self.show_welcome;
+        persist_show_welcome(&self.workspace, self.show_welcome);
+        self.notice = if self.show_welcome {
+            "welcome on startup".into()
+        } else {
+            "welcome skipped on startup".into()
+        };
+    }
+
+    fn toggle_kitty_graphics(&mut self) {
+        self.kitty_graphics = !self.kitty_graphics;
+        persist_kitty_graphics(&self.workspace, self.kitty_graphics);
+        graphics::set_kitty_allowed(self.kitty_graphics);
+        self.graphics.refresh_kitty_policy();
+        // Drop any bound Kitty surfaces so fallbacks paint cleanly.
+        self.editor_minimap_id = None;
+        self.editor_minimap_key = None;
+        self.minimap_frame_cache.borrow_mut().clear();
+        self.preview_pool.clear();
+        self.canvas_image_id = None;
+        self.canvas_painted_size = None;
+        self.canvas_placeholders_stale.set(true);
+        self.flip.dirty = true;
+        self.notice = if self.kitty_graphics {
+            "Kitty graphics on (when the host supports it)".into()
+        } else {
+            "Kitty graphics off · text fallbacks".into()
+        };
+    }
+
+    fn open_settings(&mut self) {
+        self.help = false;
+        self.palette = false;
+        self.overlay = Overlay::Settings;
+    }
+
+    fn markdown_preview_source(&self) -> String {
+        let focused = self.focused();
+        if focused.language == "markdown" || focused.name.ends_with(".md") || focused.name == "welcome"
+        {
+            return focused.text();
+        }
+        self.buffers
+            .iter()
+            .find(|buffer| buffer.language == "markdown" || buffer.name == "welcome")
+            .map(|buffer| buffer.text())
+            .unwrap_or_else(|| focused.text())
     }
 
     fn activate_canvas_kind(&mut self, kind: &str) -> bool {
@@ -1657,9 +1851,13 @@ impl EditorApp {
             return false;
         }
         self.runtime_dock = Some(kind.to_string());
-        self.canvas_painted_size = None;
-        self.canvas_image_id = None;
+        // Keep per-surface Kitty id + PNG cache. Only rebind placeholders / chrome.
+        if let Some(surface) = self.canvas_surfaces.iter().find(|s| s.kind == kind) {
+            self.canvas_image_id = Some(surface.next_image_id());
+            self.canvas_painted_size = surface.placed_size();
+        }
         self.canvas_chrome_dirty.set(true);
+        self.canvas_placeholders_stale.set(true);
         self.focus_pane(PaneFocus::Runtime);
         true
     }
@@ -1673,18 +1871,28 @@ impl EditorApp {
             .iter()
             .position(|surface| surface.kind == kind)
         {
-            self.canvas_surfaces.remove(index).stop();
+            let mut surface = self.canvas_surfaces.remove(index);
+            surface.store_in_cache(&mut self.canvas_frame_cache);
+            surface.stop();
         }
         self.runtime_dock = self
             .canvas_surfaces
             .last()
             .map(|surface| surface.kind.clone());
-        self.canvas_painted_size = None;
-        self.canvas_image_id = None;
+        if let Some(kind) = self.runtime_dock.clone() {
+            if let Some(surface) = self.canvas_surfaces.iter().find(|s| s.kind == kind) {
+                self.canvas_image_id = Some(surface.next_image_id());
+                self.canvas_painted_size = surface.placed_size();
+            }
+        } else {
+            self.canvas_painted_size = None;
+            self.canvas_image_id = None;
+        }
         self.canvas_chrome_dirty.set(true);
+        self.canvas_placeholders_stale.set(true);
         if self.runtime_dock.is_none() {
             self.runtime_focused = false;
-            self.notice = "canvas closed — 6 Browser · 7 Phone".into();
+            self.notice = "canvas closed".into();
         } else {
             self.notice = format!(
                 "{} canvas",
@@ -1849,31 +2057,6 @@ impl EditorApp {
                 return Ok(());
             }
         }
-        // Terminal pane owns Tab (and other keys) — never PositEdit completion.
-        if self.terminals.focused() {
-            let (code, modifiers) = match normalized.as_str() {
-                "esc" | "escape" => (KeyCode::Esc, KeyModifiers::NONE),
-                "tab" => (KeyCode::Tab, KeyModifiers::NONE),
-                "enter" | "return" => (KeyCode::Enter, KeyModifiers::NONE),
-                "backspace" => (KeyCode::Backspace, KeyModifiers::NONE),
-                "up" => (KeyCode::Up, KeyModifiers::NONE),
-                "down" => (KeyCode::Down, KeyModifiers::NONE),
-                "left" => (KeyCode::Left, KeyModifiers::NONE),
-                "right" => (KeyCode::Right, KeyModifiers::NONE),
-                "ctrl-q" | "ctrlq" => {
-                    self.handle(CommandKey::CtrlQ);
-                    return Ok(());
-                }
-                other if other.chars().count() == 1 => {
-                    let ch = other.chars().next().unwrap();
-                    (KeyCode::Char(ch), KeyModifiers::NONE)
-                }
-                other => return Err(format!("unsupported terminal key: {other}")),
-            };
-            if self.terminal_key(code, modifiers) {
-                return Ok(());
-            }
-        }
         match normalized.as_str() {
             "esc" | "escape" => self.handle(CommandKey::Esc),
             "tab" => self.handle(CommandKey::Tab),
@@ -1889,12 +2072,6 @@ impl EditorApp {
             "ctrl-w" | "ctrlw" => self.handle(CommandKey::CtrlW),
             "help" | "?" => self.handle(CommandKey::Help),
             "hints" => self.toggle_hover_hints(),
-            "freeze" | "canvas-freeze" => self.toggle_canvas_frozen(),
-            "thaw" | "canvas-thaw" => {
-                self.canvas_frozen = false;
-                self.notice = "Canvas live".into();
-            }
-            "minimap" | "mm" => self.toggle_minimap(),
             other if other.len() == 1 => {
                 let ch = other.chars().next().unwrap();
                 self.handle(CommandKey::Char(ch));
@@ -1902,50 +2079,6 @@ impl EditorApp {
             other => return Err(format!("unsupported key: {other}")),
         }
         Ok(())
-    }
-
-    fn toggle_canvas_frozen(&mut self) {
-        if !self.canvas_open() {
-            self.notice = "open Browser or Phone first — press 6 or 7".into();
-            return;
-        }
-        self.canvas_frozen = !self.canvas_frozen;
-        self.notice = if self.canvas_frozen {
-            "Canvas frozen — last frame held (:freeze / :thaw)".into()
-        } else {
-            "Canvas live".into()
-        };
-    }
-
-    fn toggle_minimap(&mut self) {
-        self.minimap_on = !self.minimap_on;
-        if !self.minimap_on {
-            self.editor_minimap_key = None;
-        }
-        self.notice = if self.minimap_on {
-            "minimap on — :minimap again to hide".into()
-        } else {
-            "minimap off — :minimap to show".into()
-        };
-    }
-
-    /// Focused-tile edge chrome, respecting the user minimap preference.
-    fn edge_chrome(&self, tile_w: u16, line_count: usize, visible: usize) -> (u16, u16) {
-        let visible = visible.max(1);
-        if !self.minimap_on {
-            return (
-                0,
-                u16::from(minimap_gfx::needs_scroll(line_count, visible)),
-            );
-        }
-        minimap_gfx::edge_chrome(
-            tile_w,
-            minimap_gfx::host_is_kitty(),
-            self.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
-            self.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
-            line_count,
-            visible,
-        )
     }
 
     /// MCP / control-plane: synthetic mouse against the live frame (Canvas, editor, …).
@@ -1980,12 +2113,6 @@ impl EditorApp {
             "quit-request" | "quit" => self.handle(CommandKey::CtrlQ),
             "help" => self.handle(CommandKey::Help),
             "hints" => self.toggle_hover_hints(),
-            "freeze" | "canvas-freeze" => self.toggle_canvas_frozen(),
-            "thaw" | "canvas-thaw" | "unfreeze" => {
-                self.canvas_frozen = false;
-                self.notice = "Canvas live".into();
-            }
-            "minimap" | "toggle-minimap" => self.toggle_minimap(),
             "palette" => self.handle(CommandKey::CtrlP),
             "fullscreen" | "toggle-fullscreen" => self.handle(CommandKey::CtrlW),
             "terminal.toggle" | "toggle-terminal" => {
@@ -2025,6 +2152,24 @@ impl EditorApp {
         self.focused().selection
     }
 
+    /// Apply a `textDocument/foldingRange` JSON result to the focused buffer.
+    /// Empty / malformed payloads fall back to syntax folds on next refresh.
+    pub fn apply_lsp_folding_ranges(&mut self, result: &serde_json::Value) {
+        self.focused_mut().apply_lsp_fold_result(result);
+    }
+
+    /// Fold range count and source for the focused buffer (`"lsp"` / `"syntax"` / none).
+    pub fn fold_status(&self) -> (usize, Option<&'static str>) {
+        self.focused().ensure_folds();
+        let folds = self.focused().folds.borrow();
+        let source = match folds.source() {
+            Some(fold::FoldSource::Lsp) => Some("lsp"),
+            Some(fold::FoldSource::Syntax) => Some("syntax"),
+            None => None,
+        };
+        (folds.ranges().len(), source)
+    }
+
     pub fn scroll(&self) -> usize {
         self.focused().scroll
     }
@@ -2050,8 +2195,46 @@ impl EditorApp {
     }
 
     pub fn animating(&self) -> bool {
-        // Only scroll/view motion — do NOT spin at 60fps for hover-hint countdown.
+        // Scroll/view motion, Flip 3D easing, or async doc preview finishing.
         (self.target - self.view).abs() >= 0.05
+            || self.flip.open
+            || self.preview_engine.busy()
+    }
+
+    /// Buffer tile slide in progress (Left/Right focus change).
+    fn view_transitioning(&self) -> bool {
+        (self.target - self.view).abs() >= 0.05
+    }
+
+    /// Drop Kitty minimap during document scroll / edge drag / buffer slide.
+    /// Precision text scrollbar owns the edge until motion settles.
+    fn minimap_kitty_suppressed(&self) -> bool {
+        self.view_transitioning()
+            || self.edge_drag.is_some()
+            || self.wheel_at.is_some()
+    }
+
+    /// Kitty RGB strip only when the host supports it and motion has settled.
+    fn kitty_minimap_enabled(&self) -> bool {
+        minimap_gfx::host_is_kitty() && !self.minimap_kitty_suppressed()
+    }
+
+    fn focused_edge_chrome(&self, tile_w: u16, line_count: usize, visible: usize) -> (u16, u16) {
+        // During scroll / buffer slide: precision scrollbar only (no Kitty / glyph strip).
+        if self.minimap_kitty_suppressed() {
+            if !minimap_gfx::needs_scroll(line_count, visible) || tile_w < 18 {
+                return (0, 0);
+            }
+            return (0, 1);
+        }
+        minimap_gfx::edge_chrome(
+            tile_w,
+            minimap_gfx::host_is_kitty(),
+            self.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
+            self.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
+            line_count,
+            visible,
+        )
     }
 
     fn hover_hint_pending(&self) -> bool {
@@ -2132,9 +2315,6 @@ impl EditorApp {
             self.tile_drag = None;
             self.view = window.origin(self.focus) as f32;
             self.target = self.view;
-            if window.tile_width < 18 {
-                self.notice = "editor too narrow for minimap — widen past 18 columns".into();
-            }
         } else if self.tile_drag.is_none() {
             self.target = window.origin(self.focus) as f32;
         }
@@ -2156,10 +2336,12 @@ impl EditorApp {
         }
         if self
             .wheel_at
-            .is_some_and(|at| at.elapsed() > Duration::from_millis(120))
+            .is_some_and(|at| at.elapsed() > Duration::from_millis(160))
         {
             self.scroll_axis = None;
             self.wheel_at = None;
+            // One present after settle so Kitty minimap can return.
+            changed = true;
         }
         let before = self.hover_hint.clone();
         self.refresh_hover_hint();
@@ -2192,9 +2374,7 @@ impl EditorApp {
                 if self.notifications.len() > 8 {
                     self.notifications.truncate(8);
                 }
-                self.notice = format!(
-                    "memory pressure {level:?} — close Canvas (x) or hide :minimap if stuttering"
-                );
+                self.notice = format!("memory pressure {:?}", level);
                 return true;
             }
         }
@@ -2249,11 +2429,10 @@ impl EditorApp {
             }
             Pointer::Up { column, row } => {
                 self.edge_drag = None;
+                self.tile_drag = None;
+                self.buffer_strip_drag = false;
                 if self.canvas_resize {
-                    self.canvas_resize = false;
-                    // Force one Kitty + geom publish at the final size after the drag.
-                    self.canvas_painted_size = None;
-                    self.canvas_chrome_dirty.set(true);
+                    self.end_canvas_resize(true);
                     return;
                 }
                 // Finish tap/swipe even if release is outside the canvas.
@@ -2317,18 +2496,19 @@ impl EditorApp {
                 if !drag && self.on_terminal_seam(column, row) {
                     self.terminal_drag = true;
                     self.terminal_side_drag = false;
-                    self.canvas_resize = false;
+                    self.end_canvas_resize(true);
                     return;
                 }
                 if !drag && self.on_terminal_side_seam(column, row) {
                     self.terminal_side_drag = true;
                     self.terminal_drag = false;
-                    self.canvas_resize = false;
+                    self.end_canvas_resize(true);
                     return;
                 }
                 if !drag && self.on_canvas_seam(column, row, &chrome) {
                     self.canvas_resize = true;
-                    self.canvas_chrome_dirty.set(true);
+                    self.canvas_resize_hid_gfx = false;
+                    // Layout-only while dragging — no chrome Clear / Kitty / geom.
                     self.terminal_drag = false;
                     self.terminal_side_drag = false;
                     self.resize = None;
@@ -2339,7 +2519,7 @@ impl EditorApp {
                     if !drag {
                         self.terminal_drag = false;
                         self.terminal_side_drag = false;
-                        self.canvas_resize = false;
+                        self.end_canvas_resize(true);
                     }
                     return;
                 }
@@ -2350,11 +2530,21 @@ impl EditorApp {
                     self.tile_drag = None;
                     self.terminal_drag = false;
                     self.terminal_side_drag = false;
-                    self.canvas_resize = false;
+                    self.end_canvas_resize(true);
                 }
                 if quit_hit(column, row, area) {
                     if !drag {
                         self.request_quit();
+                    }
+                    return;
+                }
+                if settings_hit(column, row, area) {
+                    if !drag {
+                        if matches!(self.overlay, Overlay::Settings) {
+                            self.overlay = Overlay::None;
+                        } else {
+                            self.open_settings();
+                        }
                     }
                     return;
                 }
@@ -2366,9 +2556,10 @@ impl EditorApp {
                 }
                 if help_hit(column, row, area, chrome.status) {
                     if !drag {
-                        self.help = !self.help;
                         if self.help {
-                            self.help_scroll = 0;
+                            self.close_help();
+                        } else {
+                            self.open_help();
                         }
                     }
                     return;
@@ -2380,28 +2571,20 @@ impl EditorApp {
                     if !drag {
                         let inner = inset(chrome.editor);
                         let index = row.saturating_sub(inner.y) as usize;
-                        // Rows: 0 title, 1 sidebar … 8 minimap (no blank padding).
-                        if index == 1 {
+                        if index == 2 {
                             self.sidebar = !self.sidebar;
-                        } else if index == 2 {
-                            self.terminals.open = !self.terminals.open;
                         } else if index == 3 {
-                            self.toggle_chat();
+                            self.terminals.open = !self.terminals.open;
                         } else if index == 4 {
-                            self.show_many = !self.show_many;
+                            self.toggle_chat();
                         } else if index == 5 {
-                            self.toggle_tab();
+                            self.show_many = !self.show_many;
                         } else if index == 6 {
-                            self.gutter.relative_numbers = !self.gutter.relative_numbers;
-                            self.notice = if self.gutter.relative_numbers {
-                                "relative line numbers on · rn again for absolute".into()
-                            } else {
-                                "absolute line numbers · rn for relative".into()
-                            };
+                            self.toggle_tab();
                         } else if index == 7 {
-                            self.toggle_canvas_frozen();
+                            self.toggle_show_welcome();
                         } else if index == 8 {
-                            self.toggle_minimap();
+                            self.toggle_kitty_graphics();
                         }
                     }
                     return;
@@ -2503,14 +2686,28 @@ impl EditorApp {
                     }
                     return;
                 }
-                if self.show_many && self.buffers.len() >= 2 {
+                if drag && self.buffer_strip_drag {
+                    if let Some(index) = self.buffer_strip_hit(column, row) {
+                        self.focus_at(index);
+                    }
+                    return;
+                }
+                if !drag {
+                    if let Some(index) = self.buffer_strip_hit(column, row) {
+                        self.buffer_strip_drag = true;
+                        self.focus_at(index);
+                        return;
+                    }
+                }
+                // Niri-style buffer edges: split or full (`f` on/off).
+                if self.buffers.len() >= 2 {
                     if drag {
                         if let Some(index) = self.tile_drag {
                             self.resize_tile(index, column, row);
                             return;
                         }
                     } else if let Some(index) = self.tile_seam(column, row) {
-                        self.tile_drag = Some(index);
+                        self.arm_buffer_edge_resize(index);
                         return;
                     }
                 }
@@ -2540,7 +2737,8 @@ impl EditorApp {
                 let line_count = self.focused().document.len_lines().max(1);
                 let gutter_w = self.gutter.width_for(line_count) as usize;
                 let visible = (tile_h.saturating_sub(2) as usize).max(1);
-                let (minimap_w, scroll_w) = self.edge_chrome(tile_w, line_count, visible);
+                let (minimap_w, scroll_w) =
+                    self.focused_edge_chrome(tile_w, line_count, visible);
                 let minimap_w = minimap_w as usize;
                 let scroll_w = scroll_w as usize;
                 let inner_w = tile_w.saturating_sub(2) as usize;
@@ -2581,38 +2779,39 @@ impl EditorApp {
                         return;
                     }
                 } else if local_x < gutter_w {
-                    let doc_line = self.focused().scroll + line_in_view + 1;
+                    self.focused().ensure_folds();
+                    let line_count = self.focused().document.len_lines().max(1);
+                    let scroll = self.focused().scroll;
+                    let doc_line_0 = self
+                        .focused()
+                        .folds
+                        .borrow()
+                        .doc_line_for_view_row(scroll, line_in_view, line_count)
+                        .unwrap_or_else(|| scroll.saturating_add(line_in_view));
+                    let doc_line = doc_line_0.saturating_add(1);
                     match gutter::hit(local_x as u16, gutter_w as u16) {
                         Some(gutter::GutterHit::Breakpoint) => {
                             if let Some(path) = self.focused().path.clone() {
                                 let on = self.gutter.toggle_breakpoint(&path, doc_line);
                                 self.notice = if on {
-                                    format!(
-                                        "breakpoint on line {doc_line} — click ● again to clear · 3 debug"
-                                    )
+                                    format!("breakpoint on line {doc_line}")
                                 } else {
                                     format!("breakpoint cleared line {doc_line}")
                                 };
-                            } else {
-                                self.notice =
-                                    "save the file first — breakpoints need a path".into();
                             }
                         }
-                        Some(gutter::GutterHit::Git) => {
-                            let mark = self
-                                .gutter
-                                .git_mark(self.focused().path.as_deref(), doc_line);
-                            let label = gutter::git_mark_label(mark);
-                            self.jump_lines(LineJump::Absolute(doc_line));
-                            // jump_lines sets a bare "line N" notice — enrich with git detail.
-                            self.notice = match mark {
-                                gutter::GitMark::None => format!(
-                                    "line {doc_line} · no local git diff on this line"
-                                ),
-                                _ => format!(
-                                    "line {doc_line} · git {label} (uncommitted vs HEAD)"
-                                ),
+                        Some(gutter::GutterHit::Fold) => {
+                            let notice = match self.focused().folds.borrow_mut().toggle_at(doc_line_0)
+                            {
+                                Some(fold::Chevron::Collapsed) => {
+                                    format!("folded line {doc_line}")
+                                }
+                                Some(fold::Chevron::Expanded) => {
+                                    format!("unfolded line {doc_line}")
+                                }
+                                None => format!("no fold on line {doc_line}"),
                             };
+                            self.notice = notice;
                         }
                         _ => {
                             self.jump_lines(LineJump::Absolute(doc_line));
@@ -2716,7 +2915,7 @@ impl EditorApp {
             self.focused().selected_text()
         };
         let Some(text) = text else {
-            self.notice = "nothing selected — drag to select, then copy".into();
+            self.notice = "nothing selected".to_string();
             return;
         };
         match clipboard::set(&text) {
@@ -2735,7 +2934,7 @@ impl EditorApp {
             return;
         }
         let Some(text) = self.focused().selected_text() else {
-            self.notice = "nothing selected — drag to select, then cut".into();
+            self.notice = "nothing selected".to_string();
             return;
         };
         match clipboard::set(&text) {
@@ -2749,15 +2948,13 @@ impl EditorApp {
 
     fn paste_clipboard(&mut self) {
         match clipboard::get() {
-            Ok(text) if text.is_empty() => {
-                self.notice = "clipboard empty — copy a selection first".into();
-            }
+            Ok(text) if text.is_empty() => self.notice = "clipboard empty".to_string(),
             Ok(text) => {
                 if self.terminals.focused() {
                     if self.terminals.write_key(text.as_bytes()) {
                         self.notice = "pasted".to_string();
                     } else {
-                        self.notice = "terminal not ready — press t to open one".into();
+                        self.notice = "terminal not ready".to_string();
                     }
                     return;
                 }
@@ -2771,12 +2968,18 @@ impl EditorApp {
         }
     }
 
-    fn menu_action(&mut self, index: usize) {
+    fn menu_action(&mut self, index: usize, over_terminal: bool) {
         match index {
             0 => self.cut_selection(),
             1 => self.copy_selection(),
             2 => self.paste_clipboard(),
-            3 => self.select_all(),
+            3 => {
+                if over_terminal && self.terminals.open {
+                    self.terminals.select_all_visible();
+                } else {
+                    self.select_all();
+                }
+            }
             _ => {}
         }
     }
@@ -2789,6 +2992,8 @@ impl EditorApp {
                 self.focus_at(index);
             }
         }
+        let term = self.terminal_rect();
+        let over_terminal = term.height > 0 && contains(term, column, row);
         let has_selection =
             self.focused().selection.is_some() || self.terminals.has_selection();
         let cursor = if has_selection { 1 } else { 2 };
@@ -2796,6 +3001,7 @@ impl EditorApp {
             x: column,
             y: row,
             cursor,
+            over_terminal,
         });
     }
 
@@ -2807,57 +3013,359 @@ impl EditorApp {
         }
         let index = row.saturating_sub(rect.y).saturating_sub(1) as usize;
         if index < MENU.len() {
+            let over_terminal = menu.over_terminal;
             self.overlay = Overlay::None;
-            self.menu_action(index);
+            self.menu_action(index, over_terminal);
         }
     }
 
     fn seam(&self, chrome: &Chrome, column: u16, row: u16) -> Option<Side> {
-        if edge_hit(chrome.tree, column, row, true) {
+        if seams::hit_left_pane(chrome.tree, column, row) {
             Some(Side::Left)
-        } else if edge_hit(chrome.agent, column, row, false) {
+        } else if seams::hit_right_pane(chrome.agent, column, row) {
             Some(Side::Right)
         } else {
             None
         }
     }
 
+    /// Buffer index whose **trailing** edge (right in landscape, bottom in
+    /// portrait) is under the pointer. Text buffers resize only from that edge
+    /// — never the leading edge — including the last buffer (niri-style).
     fn tile_seam(&self, column: u16, row: u16) -> Option<usize> {
-        if !self.show_many || self.buffers.len() < 2 {
+        if self.buffers.is_empty() {
+            return None;
+        }
+        let (tiles, _) = self.content_tiles_and_strip(
+            self.frame_chrome(Rect::new(0, 0, self.width, self.height))
+                .content,
+        );
+        if tiles.width == 0 || tiles.height == 0 {
+            return None;
+        }
+        // Fullscreen: only the focused buffer's trailing edge.
+        if !self.show_many {
+            if self.buffers.len() < 2 {
+                return None;
+            }
+            let focus = self.focus.min(self.buffers.len() - 1);
+            let on_title = row == tiles.y;
+            match self.axis {
+                Axis::Horizontal => {
+                    if row < tiles.y || row >= tiles.y.saturating_add(tiles.height) || on_title {
+                        return None;
+                    }
+                    let right = tiles.x.saturating_add(tiles.width).saturating_sub(1);
+                    if column == right {
+                        return Some(focus);
+                    }
+                    if let Some(seam) = seams::right_pane_seam(tiles) {
+                        if seam.contains_grab(column, row) {
+                            return Some(focus);
+                        }
+                    }
+                }
+                Axis::Vertical => {
+                    if column < tiles.x || column >= tiles.x.saturating_add(tiles.width) {
+                        return None;
+                    }
+                    let bottom = tiles.y.saturating_add(tiles.height).saturating_sub(1);
+                    if row == bottom {
+                        return Some(focus);
+                    }
+                    let seam = seams::SeamVisual::horizontal(tiles.x, bottom, tiles.width);
+                    if seam.contains_grab(column, row) {
+                        return Some(focus);
+                    }
+                }
+            }
             return None;
         }
         let window = self.window();
-        for index in 0..self.buffers.len().saturating_sub(1) {
+        // Prefer the rightmost/bottommost hit when tiles abut so each buffer
+        // owns only its own trailing edge.
+        let mut hit: Option<usize> = None;
+        for index in 0..self.buffers.len() {
             let Some(slice) = layout::tile_slice(window, index, self.view) else {
                 continue;
             };
             let (tile_w, tile_h) = window.tile_box(index);
             let on_title = slice.source_y == 0 && row == slice.screen_y;
-            let hit = match window.axis {
+            let seam = match window.axis {
+                Axis::Horizontal if slice.source_x + slice.width == tile_w => {
+                    let x = slice.screen_x.saturating_add(slice.width).saturating_sub(1);
+                    Some(seams::SeamVisual::vertical(
+                        x,
+                        slice.screen_y,
+                        slice.height.max(1),
+                    ))
+                }
+                Axis::Vertical if slice.source_y + slice.height == tile_h => {
+                    let y = slice.screen_y.saturating_add(slice.height).saturating_sub(1);
+                    Some(seams::SeamVisual::horizontal(
+                        slice.screen_x,
+                        y,
+                        slice.width.max(1),
+                    ))
+                }
+                _ => None,
+            };
+            let Some(seam) = seam else {
+                continue;
+            };
+            let on_edge = match window.axis {
                 Axis::Horizontal => {
-                    slice.source_x + slice.width == tile_w
-                        && column + 1 == slice.screen_x + slice.width
+                    column == seam.line.x
                         && row >= slice.screen_y
                         && row < slice.screen_y.saturating_add(slice.height)
                         && !on_title
                 }
                 Axis::Vertical => {
-                    slice.source_y + slice.height == tile_h
-                        && row + 1 == slice.screen_y + slice.height
+                    row == seam.line.y
                         && column >= slice.screen_x
                         && column < slice.screen_x.saturating_add(slice.width)
                 }
             };
-            if hit {
-                return Some(index);
+            if on_edge || seam.contains_grab(column, row) {
+                hit = Some(index);
             }
         }
-        None
+        hit
+    }
+
+    /// Enter split mode if needed and seed independent spans for a trailing-edge drag.
+    fn arm_buffer_edge_resize(&mut self, index: usize) {
+        let n = self.buffers.len();
+        if index >= n {
+            return;
+        }
+        let (tiles, _) = self.content_tiles_and_strip(
+            self.frame_chrome(Rect::new(0, 0, self.width, self.height))
+                .content,
+        );
+        let along = match self.axis {
+            Axis::Horizontal => tiles.width,
+            Axis::Vertical => tiles.height,
+        }
+        .max(1);
+        self.show_many = true;
+        if self
+            .tile_spans
+            .as_ref()
+            .is_none_or(|spans| spans.len() != n)
+        {
+            // Seed from the current equal layout so undragged buffers keep size.
+            let window = layout::window(tiles, self.axis, true, n);
+            let mut spans: Vec<u16> = (0..n).map(|i| window.along(i)).collect();
+            if spans.iter().all(|span| *span >= 1) {
+                let used: u16 = spans.iter().sum();
+                // If equal tiles don't fill the viewport yet (rare), grow the last.
+                if used < along {
+                    spans[n - 1] = spans[n - 1].saturating_add(along - used);
+                }
+                self.tile_spans = Some(spans);
+            } else {
+                let each = (along / n as u16).max(1);
+                let mut spans = vec![each; n];
+                let used: u16 = spans.iter().sum();
+                if used < along {
+                    spans[n - 1] = spans[n - 1].saturating_add(along - used);
+                }
+                self.tile_spans = Some(spans);
+            }
+        }
+        self.tile_drag = Some(index);
+        if self.focus != index {
+            self.focus_at(index);
+        }
+    }
+
+    fn content_tiles_and_strip(&self, content: Rect) -> (Rect, Rect) {
+        if content.height < 4 || self.buffers.is_empty() {
+            return (content, Rect::default());
+        }
+        let strip = Rect {
+            x: content.x,
+            y: content.y.saturating_add(content.height.saturating_sub(1)),
+            width: content.width,
+            height: 1,
+        };
+        let tiles = Rect {
+            x: content.x,
+            y: content.y,
+            width: content.width,
+            height: content.height.saturating_sub(1),
+        };
+        (tiles, strip)
+    }
+
+    fn buffer_strip_metrics(&self) -> scrollbar::ScrollMetrics {
+        let total = self.buffers.len().max(1);
+        let visible = if self.show_many {
+            // How many tiles fit roughly in the strip.
+            match self.axis {
+                Axis::Horizontal => {
+                    let w = self
+                        .content_tiles_and_strip(
+                            self.frame_chrome(Rect::new(0, 0, self.width, self.height))
+                                .content,
+                        )
+                        .0
+                        .width
+                        .max(1) as usize;
+                    (w / layout::COLUMNS.max(1) as usize).clamp(1, total)
+                }
+                Axis::Vertical => 1.max(total.min(3)),
+            }
+        } else {
+            1
+        };
+        scrollbar::ScrollMetrics {
+            offset: self.focus.min(total.saturating_sub(1)),
+            visible,
+            total,
+        }
+    }
+
+    fn buffer_strip_hit(&self, column: u16, row: u16) -> Option<usize> {
+        let (_, strip) = self.content_tiles_and_strip(
+            self.frame_chrome(Rect::new(0, 0, self.width, self.height))
+                .content,
+        );
+        if strip.height == 0 || !contains(strip, column, row) {
+            return None;
+        }
+        let metrics = self.buffer_strip_metrics();
+        let local = column.saturating_sub(strip.x);
+        Some(
+            metrics
+                .offset_for_track_y(local, strip.width.max(1))
+                .min(self.buffers.len().saturating_sub(1)),
+        )
+    }
+
+    fn flip_cards(&self) -> Vec<flip3d::BufferCard> {
+        let theme_fp = self.minimap_theme.fingerprint;
+        let kitty = minimap_gfx::host_is_kitty();
+        self.buffers
+            .iter()
+            .enumerate()
+            .map(|(index, buffer)| {
+                let text = buffer.text();
+                let lines: Vec<String> = text
+                    .lines()
+                    .take(14)
+                    .map(|line| {
+                        let mut s: String = line.chars().take(48).collect();
+                        if s.is_empty() {
+                            s.push(' ');
+                        }
+                        s
+                    })
+                    .collect();
+                let preview = if kitty {
+                    let key = minimap_gfx::preview_key(
+                        index,
+                        buffer.document.revision(),
+                        theme_fp,
+                        minimap_gfx::FLIP_CARD_W,
+                        minimap_gfx::FLIP_CARD_H,
+                    );
+                    self.preview_pool.get(key)
+                } else {
+                    None
+                };
+                flip3d::BufferCard {
+                    title: buffer.name.clone(),
+                    lines,
+                    active: index == self.focus,
+                    preview,
+                }
+            })
+            .collect()
+    }
+
+    /// Snapshot highlight cells and enqueue headless Kitty Flip previews (never blocks).
+    fn schedule_flip_previews(&self) {
+        if cfg!(test) || !minimap_gfx::host_is_kitty() {
+            return;
+        }
+        let theme = self.minimap_theme;
+        let cols = ((minimap_gfx::FLIP_CARD_W / minimap_gfx::PX_PER_CHAR_BASE) as usize).clamp(24, 96);
+        let max_lines =
+            ((minimap_gfx::FLIP_CARD_H / minimap_gfx::PX_PER_LINE_BASE) as usize).clamp(8, 48);
+        for (index, buffer) in self.buffers.iter().enumerate() {
+            let key = minimap_gfx::preview_key(
+                index,
+                buffer.document.revision(),
+                theme.fingerprint,
+                minimap_gfx::FLIP_CARD_W,
+                minimap_gfx::FLIP_CARD_H,
+            );
+            if !self.preview_pool.needs_work(key) {
+                continue;
+            }
+            buffer.ensure_highlight_cache();
+            let mut lines = Vec::with_capacity(max_lines);
+            for line in 0..max_lines.min(buffer.document.len_lines().max(1)) {
+                lines.push(minimap_syntax_cells(buffer, line, cols, theme));
+            }
+            self.preview_pool.request(minimap_gfx::PreviewJob {
+                key,
+                theme,
+                width: minimap_gfx::FLIP_CARD_W,
+                height: minimap_gfx::FLIP_CARD_H,
+                lines,
+            });
+        }
+    }
+
+    fn open_flip_switcher(&mut self) {
+        if self.buffers.len() < 2 {
+            self.notice =
+                "Flip 3D needs 2+ buffers · open another file, then hold Tab (view mode)".into();
+            return;
+        }
+        self.editing = false; // switcher owns keys until Tab release / Enter / Esc
+        self.flip.open_at(self.focus, self.buffers.len());
+        self.flip_tick_at = Some(Instant::now());
+        // Kick background syntax rasters immediately — paint uses Arc hits only.
+        self.schedule_flip_previews();
+        self.notice = format!(
+            "Flip 3D · {}/{} · ←→ choose · release Tab to switch · Esc cancel",
+            self.flip.selected + 1,
+            self.buffers.len()
+        );
+    }
+
+    fn flip_commit(&mut self) {
+        if !self.flip.open {
+            return;
+        }
+        let selected = self.flip.selected.min(self.buffers.len().saturating_sub(1));
+        self.flip.settle();
+        self.flip.close();
+        self.focus_at(selected);
+        self.focus_pane(PaneFocus::Editor);
+        self.notice = format!("switched to {}", self.focused().name);
+    }
+
+    fn flip_cancel(&mut self) {
+        if !self.flip.open {
+            return;
+        }
+        let restore = self.flip.restore.min(self.buffers.len().saturating_sub(1));
+        self.flip.close();
+        self.focus_at(restore);
+        self.notice = "buffer switcher cancelled".into();
     }
 
     fn resize_tile(&mut self, index: usize, column: u16, row: u16) {
-        if !self.show_many || index + 1 >= self.buffers.len() {
+        if index >= self.buffers.len() {
             return;
+        }
+        if !self.show_many {
+            self.arm_buffer_edge_resize(index);
         }
         if self
             .tile_spans
@@ -2871,22 +3379,25 @@ impl EditorApp {
         let Some(mut spans) = self.tile_spans.clone() else {
             return;
         };
-        let total = spans[index].saturating_add(spans[index + 1]);
         let min = match window.axis {
             Axis::Horizontal => 12,
             Axis::Vertical => 6,
         };
-        if total < min * 2 {
-            return;
+        // Niri-style: only this buffer's preferred size changes. Neighbours keep
+        // their spans; the strip scrolls when the sum exceeds the viewport.
+        let max = match window.axis {
+            Axis::Horizontal => (layout::COLUMNS.saturating_mul(4)).max(window.viewport.width),
+            Axis::Vertical => (layout::PORTRAIT_SPLIT_HEIGHT.saturating_mul(4))
+                .max(window.viewport.height),
         }
+        .max(min);
         let (cursor, start) = match window.axis {
             Axis::Horizontal => (column as i32, window.viewport.x as i32),
             Axis::Vertical => (row as i32, window.viewport.y as i32),
         };
         let wanted = (cursor - start - window.origin(index) + self.view.round() as i32 + 1)
-            .clamp(min as i32, (total - min) as i32) as u16;
+            .clamp(min as i32, max as i32) as u16;
         spans[index] = wanted;
-        spans[index + 1] = total - wanted;
         self.tile_spans = Some(spans);
     }
 
@@ -2919,7 +3430,20 @@ impl EditorApp {
     }
 
     fn on_canvas_seam(&self, column: u16, row: u16, chrome: &Chrome) -> bool {
-        chrome.canvas.width > 0 && edge_hit(chrome.canvas, column, row, false)
+        chrome.canvas.width > 0 && seams::hit_right_pane(chrome.canvas, column, row)
+    }
+
+    fn end_canvas_resize(&mut self, refresh: bool) {
+        if !self.canvas_resize && !self.canvas_resize_hid_gfx {
+            return;
+        }
+        self.canvas_resize = false;
+        self.canvas_resize_hid_gfx = false;
+        if refresh {
+            self.canvas_painted_size = None;
+            self.canvas_chrome_dirty.set(true);
+            self.canvas_placeholders_stale.set(true);
+        }
     }
 
     fn resize_canvas(&mut self, column: u16) {
@@ -2930,8 +3454,9 @@ impl EditorApp {
         let width = self.width.saturating_sub(column);
         let max = self.width.saturating_sub(40).max(28);
         if width < 20 {
-            // Collapse: close all Canvas tabs.
+            // Collapse: close all Canvas tabs (keep last frames in session cache).
             while let Some(mut surface) = self.canvas_surfaces.pop() {
+                surface.store_in_cache(&mut self.canvas_frame_cache);
                 surface.stop();
             }
             self.runtime_dock = None;
@@ -2939,13 +3464,13 @@ impl EditorApp {
             self.runtime_width = None;
             self.canvas_painted_size = None;
             self.canvas_image_id = None;
-            self.canvas_resize = false;
-            self.notice = "canvas closed — 6 Browser · 7 Phone".into();
+            self.end_canvas_resize(false);
+            self.notice = "canvas closed".into();
             return;
         }
         self.runtime_width = Some(width.clamp(28, max));
-        // Layout updates immediately; Kitty + geom wait until mouse-up.
-        self.canvas_chrome_dirty.set(true);
+        // Layout only. Do not Clear chrome or publish Kitty/geom until mouse-up —
+        // those paths block the UI thread under drag storms.
     }
 
     fn agent_button(&self, agent: Rect, column: u16, row: u16) -> bool {
@@ -3033,8 +3558,7 @@ impl EditorApp {
 
     fn toggle_notifications(&mut self) {
         if self.notifications.is_empty() {
-            self.notice =
-                "no notifications yet — errors collect here (press i again later)".into();
+            self.notice = "no notifications".to_string();
             self.notifications_open = false;
             return;
         }
@@ -3044,9 +3568,9 @@ impl EditorApp {
     fn toggle_terminal(&mut self) {
         self.terminals.toggle();
         self.notice = if self.terminals.open {
-            "terminal on — + opens a shell".into()
+            "terminal on".to_string()
         } else {
-            "terminal off — t to reopen".into()
+            "terminal off".to_string()
         };
     }
 
@@ -3061,7 +3585,7 @@ impl EditorApp {
         self.terminals.resize(cols, rows);
         let closed = self.terminals.drain();
         if closed > 0 {
-            self.notice = "terminal closed — t to reopen".into();
+            self.notice = "terminal closed".to_string();
         }
         if let Err(detail) = self.terminals.ensure(&self.workspace, cols, rows) {
             self.notice = format!("terminal: {detail}");
@@ -3072,23 +3596,16 @@ impl EditorApp {
 
     fn on_terminal_seam(&self, column: u16, row: u16) -> bool {
         let rect = self.terminal_rect();
-        if rect.height == 0
-            || column < rect.x
-            || column >= rect.x.saturating_add(rect.width)
-        {
+        if rect.height == 0 {
             return false;
         }
-        // Row immediately above the pane.
-        if row + 1 == rect.y {
-            return true;
-        }
-        // Top border / title row of an open pane. Keep `t` / log|term clickable.
-        if self.terminals.open && rect.height > 1 && row == rect.y {
-            let local_x = column.saturating_sub(rect.x);
-            return !self.terminals.toggle_hit(local_x, 0, rect.width)
-                && !self.terminals.switch_hit(local_x, 0, rect.width);
-        }
-        false
+        let local_x = column.saturating_sub(rect.x);
+        let title_blocked = self.terminals.open
+            && rect.height > 1
+            && row == rect.y
+            && (self.terminals.toggle_hit(local_x, 0, rect.width)
+                || self.terminals.switch_hit(local_x, 0, rect.width));
+        seams::hit_bottom_pane(rect, column, row, title_blocked)
     }
 
     fn on_terminal_side_seam(&self, column: u16, row: u16) -> bool {
@@ -3274,6 +3791,15 @@ impl EditorApp {
         if !contains(inner, column, row) {
             return true;
         }
+        if self.runtime_dock.as_deref() == Some("markdown") {
+            if dy < 0 {
+                self.markdown_preview_scroll = self.markdown_preview_scroll.saturating_sub(3);
+            } else if dy > 0 {
+                self.markdown_preview_scroll = self.markdown_preview_scroll.saturating_add(3);
+            }
+            self.canvas_chrome_dirty.set(true);
+            return true;
+        }
         let local_x = column.saturating_sub(inner.x);
         let local_y = row.saturating_sub(inner.y);
         let Some(surface) = self.canvas_active_mut() else {
@@ -3333,9 +3859,9 @@ impl EditorApp {
             terminal::Click::Toggle => {
                 self.terminals.clear_selection();
                 self.notice = if self.terminals.open {
-                    "terminal on — + opens a shell".into()
+                    "terminal on".to_string()
                 } else {
-                    "terminal off — t to reopen".into()
+                    "terminal off".to_string()
                 };
                 if self.terminals.open {
                     self.focus_pane(PaneFocus::Terminal);
@@ -3346,9 +3872,9 @@ impl EditorApp {
             terminal::Click::Switch => {
                 self.terminals.clear_selection();
                 self.notice = if self.terminals.show_console {
-                    "console — b builds · r runs · output lands here".into()
+                    "console".to_string()
                 } else {
-                    "terminal — + opens a shell".into()
+                    "terminal".to_string()
                 };
                 if !self.terminals.show_console {
                     self.focus_pane(PaneFocus::Terminal);
@@ -3394,16 +3920,53 @@ impl EditorApp {
     }
 
     fn dispatch(&mut self, key: CommandKey) {
+        if self.flip.open {
+            match key {
+                CommandKey::Esc => self.flip_cancel(),
+                CommandKey::Enter | CommandKey::TabRelease => self.flip_commit(),
+                // Hold-Tab must not cycle — arrows (and Alt-Tab) choose the target.
+                CommandKey::Tab => {}
+                CommandKey::AltTab | CommandKey::Right | CommandKey::Down => {
+                    self.flip.flip(1, self.buffers.len());
+                    self.notice = format!(
+                        "buffer {}/{} · {}",
+                        self.flip.selected + 1,
+                        self.buffers.len(),
+                        self.buffers
+                            .get(self.flip.selected)
+                            .map(|b| b.name.as_str())
+                            .unwrap_or("?")
+                    );
+                }
+                CommandKey::AltShiftTab
+                | CommandKey::Left
+                | CommandKey::Up
+                | CommandKey::Backspace => {
+                    self.flip.flip(-1, self.buffers.len());
+                    self.notice = format!(
+                        "buffer {}/{} · {}",
+                        self.flip.selected + 1,
+                        self.buffers.len(),
+                        self.buffers
+                            .get(self.flip.selected)
+                            .map(|b| b.name.as_str())
+                            .unwrap_or("?")
+                    );
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.overlay != Overlay::None && !self.help && !self.palette {
             self.handle_overlay(key);
             return;
         }
         if self.help {
             match key {
-                CommandKey::Help | CommandKey::Esc => self.help = false,
+                CommandKey::Help | CommandKey::Esc => self.close_help(),
                 CommandKey::CtrlQ => self.request_quit(),
                 CommandKey::CtrlP => {
-                    self.help = false;
+                    self.close_help();
                     self.palette = true;
                 }
                 CommandKey::Up => self.scroll_help(-1),
@@ -3430,22 +3993,6 @@ impl EditorApp {
         }
         if self.tree_query.is_some() {
             self.handle_tree_search(key);
-            return;
-        }
-        // Terminal keyboard focus: shell owns Tab (and other keys). Never route
-        // through editor ghost / indent completion while the PTY is focused.
-        if self.terminals.focused() {
-            match key {
-                CommandKey::CtrlQ => self.request_quit(),
-                CommandKey::Esc => {
-                    self.terminals.blur();
-                }
-                other => {
-                    if let Some(bytes) = command_key_terminal_bytes(other) {
-                        let _ = self.terminals.write_key(&bytes);
-                    }
-                }
-            }
             return;
         }
         if self.agent_focused {
@@ -3494,6 +4041,17 @@ impl EditorApp {
             CommandKey::CtrlRight => self.shift_focus(1),
             CommandKey::CtrlUp => self.scroll_page(-1),
             CommandKey::CtrlDown => self.scroll_page(1),
+            CommandKey::AltTab => self.open_flip_switcher(),
+            CommandKey::AltShiftTab => {
+                let focus = self.focus;
+                let count = self.buffers.len();
+                self.open_flip_switcher();
+                if self.flip.open && count > 1 {
+                    self.flip.selected = focus.checked_sub(1).unwrap_or(count - 1);
+                    self.flip.scroll = self.flip.selected as f32;
+                    self.flip.dirty = true;
+                }
+            }
             _ if self.editing => self.edit_key(key),
             _ => self.view_key(key),
         }
@@ -3590,6 +4148,12 @@ impl EditorApp {
                 self.edit_word(true, true);
             }
             CommandKey::Enter => self.begin_edit(),
+            // View mode: hold Tab opens Flip 3D; release commits (see flip.open handler).
+            CommandKey::Tab => {
+                self.clear_chord();
+                self.open_flip_switcher();
+            }
+            CommandKey::TabRelease => {}
             _ => {}
         }
     }
@@ -3640,7 +4204,6 @@ impl EditorApp {
             }
             PaneFocus::Terminal => {
                 self.editing = false;
-                self.ghost = None;
                 self.agent_focused = false;
                 self.tree_focused = false;
                 self.runtime_focused = false;
@@ -3648,7 +4211,6 @@ impl EditorApp {
             }
             PaneFocus::Agent => {
                 self.editing = false;
-                self.ghost = None;
                 self.terminals.blur();
                 self.tree_focused = false;
                 self.runtime_focused = false;
@@ -3656,7 +4218,6 @@ impl EditorApp {
             }
             PaneFocus::Tree => {
                 self.editing = false;
-                self.ghost = None;
                 self.terminals.blur();
                 self.agent_focused = false;
                 self.runtime_focused = false;
@@ -3664,7 +4225,6 @@ impl EditorApp {
             }
             PaneFocus::Runtime => {
                 self.editing = false;
-                self.ghost = None;
                 self.terminals.blur();
                 self.agent_focused = false;
                 self.tree_focused = false;
@@ -3717,40 +4277,130 @@ impl EditorApp {
             return;
         }
         self.agent_log.push(format!("› {prompt}"));
-        if self.agent_program.is_empty() {
-            self.agent_log.push(
-                "no agent CLI on PATH — set IDE_AGENT or install claude/codex/agent".into(),
-            );
-            return;
-        }
+        let route = agent_route();
+        self.agent_program = route
+            .chosen
+            .program
+            .clone()
+            .unwrap_or_else(|| route.chosen.kind.label().to_string());
         if cfg!(test) {
-            self.agent_log.push(format!("{} ready", self.agent_program));
+            self.agent_log.push(format!(
+                "{} ready ({}µs)",
+                route.chosen.kind.label(),
+                route.elapsed_us
+            ));
+            // Exercise FreeLocal tools even when a cloud CLI is on PATH.
+            if route.chosen.kind == ide_ai::BackendKind::FreeLocal
+                || ide_ai::is_explicit_tool_prompt(&prompt)
+            {
+                self.run_free_agent(&prompt);
+            }
             return;
         }
-        let args = agent_args(&self.agent_program, &prompt);
-        match capture(&self.agent_program, &args, &self.workspace) {
-            Ok((_, text)) => {
-                let text = ide_ai::redact(&text);
-                let lines: Vec<String> = text
-                    .lines()
-                    .map(str::trim_end)
-                    .map(str::to_string)
-                    .filter(|line| !line.is_empty())
-                    .take(8)
-                    .collect();
-                if lines.is_empty() {
-                    self.agent_log
-                        .push(format!("{} finished", self.agent_program));
-                } else {
-                    self.agent_log.extend(lines);
+        // Explicit tool verbs always use FreeLocal (no cloud round-trip).
+        if route.chosen.kind == ide_ai::BackendKind::FreeLocal
+            || ide_ai::is_explicit_tool_prompt(&prompt)
+        {
+            self.run_free_agent(&prompt);
+        } else {
+            let kind = route.chosen.kind;
+            let Some(program) = route.chosen.program.as_deref() else {
+                self.agent_log.push("agent backend missing program".into());
+                return;
+            };
+            let args = ide_ai::cli_args(kind, program, &prompt);
+            match capture(program, &args, &self.workspace) {
+                Ok((_, text)) => {
+                    let text = ide_ai::redact(&text);
+                    let lines: Vec<String> = text
+                        .lines()
+                        .map(str::trim_end)
+                        .map(str::to_string)
+                        .filter(|line| !line.is_empty())
+                        .take(8)
+                        .collect();
+                    if lines.is_empty() {
+                        self.agent_log.push(format!("{program} finished"));
+                    } else {
+                        self.agent_log.extend(lines);
+                    }
                 }
+                Err(detail) => self.agent_log.push(detail),
             }
-            Err(detail) => self.agent_log.push(detail),
         }
         if self.agent_log.len() > 40 {
             let extra = self.agent_log.len() - 40;
             self.agent_log.drain(0..extra);
         }
+    }
+
+    fn run_free_agent(&mut self, prompt: &str) {
+        let root = self.workspace.clone();
+        let result = ide_ai::run_free_local(
+            &root,
+            prompt,
+            |path| {
+                let full = root.join(path);
+                std::fs::read_to_string(&full).map_err(|err| err.to_string())
+            },
+            |path| {
+                let full = if path.as_os_str().is_empty() {
+                    root.clone()
+                } else {
+                    root.join(path)
+                };
+                let mut names = Vec::new();
+                for entry in std::fs::read_dir(&full).map_err(|err| err.to_string())? {
+                    let entry = entry.map_err(|err| err.to_string())?;
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                }
+                names.sort();
+                Ok(names)
+            },
+            |path, needle| {
+                let full = if path.as_os_str().is_empty() {
+                    root.clone()
+                } else {
+                    root.join(path)
+                };
+                let mut hits = Vec::new();
+                if full.is_file() {
+                    if let Ok(text) = std::fs::read_to_string(&full) {
+                        for (index, line) in text.lines().enumerate() {
+                            if line.contains(needle) {
+                                hits.push(format!(
+                                    "{}:{}:{line}",
+                                    path.display(),
+                                    index + 1
+                                ));
+                            }
+                        }
+                    }
+                } else if full.is_dir() {
+                    let walker = walk_files(&full, 200);
+                    for file in walker {
+                        if let Ok(text) = std::fs::read_to_string(&file) {
+                            for (index, line) in text.lines().enumerate() {
+                                if line.contains(needle) {
+                                    let rel = file.strip_prefix(&root).unwrap_or(&file);
+                                    hits.push(format!("{}:{}:{line}", rel.display(), index + 1));
+                                    if hits.len() >= 40 {
+                                        return Ok(hits);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(hits)
+            },
+        );
+        self.agent_log.push(format!(
+            "free-local · {} tool(s) · {}µs",
+            result.tools.len(),
+            result.elapsed_us
+        ));
+        self.agent_log.extend(result.lines.into_iter().take(12));
     }
 
     fn push_chord(&mut self, ch: char) {
@@ -3767,6 +4417,18 @@ impl EditorApp {
             "lll" => {
                 self.clear_chord();
                 self.open_finder(FinderKind::Grep);
+            }
+            "za" => {
+                self.clear_chord();
+                self.notice = self.focused_mut().fold_toggle_at_caret();
+            }
+            "zc" => {
+                self.clear_chord();
+                self.notice = self.focused_mut().fold_close_at_caret();
+            }
+            "ze" => {
+                self.clear_chord();
+                self.notice = self.focused_mut().fold_open_at_caret();
             }
             "zo" => {
                 self.clear_chord();
@@ -3796,12 +4458,17 @@ impl EditorApp {
                 self.clear_chord();
                 self.gutter.relative_numbers = !self.gutter.relative_numbers;
                 self.notice = if self.gutter.relative_numbers {
-                    "relative line numbers on · rn again for absolute".into()
+                    "relative line numbers on".into()
                 } else {
-                    "absolute line numbers · rn for relative".into()
+                    "absolute line numbers".into()
                 };
             }
-            "b" | "r" | "f" | "l" | "ll" | "z" => {
+            "gs" => {
+                // Fallback when the host does not report Tab key-up for hold-to-switch.
+                self.clear_chord();
+                self.open_flip_switcher();
+            }
+            "b" | "r" | "f" | "l" | "ll" | "z" | "g" => {
                 self.chord = combined;
                 self.chord_deadline = Some(Instant::now() + Duration::from_millis(450));
             }
@@ -3852,10 +4519,10 @@ impl EditorApp {
             '>' => self.toggle_chat(),
             'n' if self.pending_plan.is_some() => {
                 self.pending_plan = None;
-                self.notice = "plan cancelled — 1/2/4 previews again".into();
+                self.notice = "plan cancelled".to_string();
             }
             '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => self.workbench_key(ch),
-            ';' => self.overlay = Overlay::Settings,
+            ';' => self.open_settings(),
             '[' => self.focus_at(0),
             ']' => {
                 let last = self.buffers.len().saturating_sub(1);
@@ -3943,16 +4610,8 @@ impl EditorApp {
                 CommandKey::Char('<') | CommandKey::Char('s') => self.sidebar = !self.sidebar,
                 CommandKey::Char('>') | CommandKey::Char('c') => self.toggle_chat(),
                 CommandKey::Char('f') => self.show_many = !self.show_many,
-                CommandKey::Char('r') => {
-                    self.gutter.relative_numbers = !self.gutter.relative_numbers;
-                    self.notice = if self.gutter.relative_numbers {
-                        "relative line numbers on · rn again for absolute".into()
-                    } else {
-                        "absolute line numbers · rn for relative".into()
-                    };
-                }
-                CommandKey::Char('z') => self.toggle_canvas_frozen(),
-                CommandKey::Char('m') => self.toggle_minimap(),
+                CommandKey::Char('w') => self.toggle_show_welcome(),
+                CommandKey::Char('k') => self.toggle_kitty_graphics(),
                 _ => {}
             },
             Overlay::Vim => {
@@ -3974,8 +4633,9 @@ impl EditorApp {
                 }
                 CommandKey::Enter => {
                     let cursor = menu.cursor;
+                    let over_terminal = menu.over_terminal;
                     self.overlay = Overlay::None;
-                    self.menu_action(cursor);
+                    self.menu_action(cursor, over_terminal);
                 }
                 CommandKey::Char('x') => {
                     self.overlay = Overlay::None;
@@ -3990,8 +4650,9 @@ impl EditorApp {
                     self.paste_clipboard();
                 }
                 CommandKey::Char('a') => {
+                    let over_terminal = menu.over_terminal;
                     self.overlay = Overlay::None;
-                    self.select_all();
+                    self.menu_action(3, over_terminal);
                 }
                 _ => {}
             },
@@ -4002,6 +4663,15 @@ impl EditorApp {
     fn open_help(&mut self) {
         self.help = true;
         self.help_scroll = 0;
+        self.help_force_text = false;
+        // Text Help paints instantly; Kitty pages arrive from the worker.
+        self.schedule_help_raster(edocview::RASTER_DEBOUNCE);
+    }
+
+    fn close_help(&mut self) {
+        self.help = false;
+        self.preview_engine.cancel_slot(edocview::PreviewSlot::Help);
+        // Kitty delete runs from present() via clear_help_graphics.
     }
 
     fn clear_chord(&mut self) {
@@ -4024,6 +4694,7 @@ impl EditorApp {
             "l" => self.open_finder(FinderKind::Buffers),
             "ll" => self.open_finder(FinderKind::Files),
             "z" => self.spatial_open_overview(),
+            // Lone "g" is a chord prefix for `gs` (Flip 3D) — do not act alone.
             _ => {}
         }
     }
@@ -4065,10 +4736,8 @@ impl EditorApp {
                 self.target = view as f32;
                 self.editing = editing;
                 self.spatial_lines.clear();
-                self.spatial_outline.clear();
-                self.spatial_filter.clear();
                 self.graphics.clear();
-                self.notice = "spatial closed — zo overview · zl symbols".into();
+                self.notice = "spatial closed".into();
             }
             SpatialOutcome::OpenLens(session) => {
                 self.spatial_lines = session.lines;
@@ -4094,9 +4763,8 @@ impl EditorApp {
                     })
                     .collect();
                 if self.spatial_lines.is_empty() {
-                    self.spatial_lines.push(
-                        "impact: no evidence yet — edit nearby, then zi again".into(),
-                    );
+                    self.spatial_lines
+                        .push("impact: no evidence yet".into());
                 }
                 self.spatial_cursor = 0;
                 self.spatial.active_mode = SpatialMode::Impact;
@@ -4206,62 +4874,6 @@ impl EditorApp {
             &self.spatial_context(),
         );
         self.apply_spatial_outcome(outcome);
-        // Host fills the stub lens with a lightweight outline from the buffer.
-        if self.spatial.active_mode == SpatialMode::Lens {
-            self.spatial_outline = outline_symbols(&self.focused().text());
-            self.spatial_filter.clear();
-            self.refresh_symbol_lens();
-        }
-    }
-
-    fn refresh_symbol_lens(&mut self) {
-        if self.spatial_outline.is_empty() {
-            self.spatial_lines = vec![
-                "no symbols here — add a fn / struct / class / def".into(),
-                "Esc closes".into(),
-            ];
-            self.spatial_cursor = 0;
-            self.notice = "symbols empty — Esc closes".into();
-            return;
-        }
-        let needle = self.spatial_filter.to_ascii_lowercase();
-        let rows: Vec<(usize, String)> = if needle.is_empty() {
-            self.spatial_outline.clone()
-        } else {
-            self.spatial_outline
-                .iter()
-                .filter(|(_, label)| label.to_ascii_lowercase().contains(&needle))
-                .cloned()
-                .collect()
-        };
-        if rows.is_empty() {
-            self.spatial_lines = vec![format!(
-                "no symbols match /{} — Backspace clears · Esc closes",
-                self.spatial_filter
-            )];
-            self.spatial_cursor = 0;
-            self.notice = format!("symbols /{} — 0 matches", self.spatial_filter);
-            return;
-        }
-        self.spatial_lines = rows
-            .into_iter()
-            .map(|(line, label)| format!("{line:>4}  {label}"))
-            .collect();
-        self.spatial_cursor = self
-            .spatial_cursor
-            .min(self.spatial_lines.len().saturating_sub(1));
-        self.notice = if self.spatial_filter.is_empty() {
-            format!(
-                "symbols · {} · type to filter · Enter jumps",
-                self.spatial_lines.len()
-            )
-        } else {
-            format!(
-                "symbols /{} · {} · Enter jumps",
-                self.spatial_filter,
-                self.spatial_lines.len()
-            )
-        };
     }
 
     fn spatial_structural(&mut self, op: StructuralOp) {
@@ -4309,13 +4921,15 @@ impl EditorApp {
     fn spatial_preview(&mut self) {
         self.spatial
             .remember_focus(self.focus, self.view as i32, self.editing);
-        let outcome = self.spatial.dispatch(
-            SpatialAction::OpenPreview {
-                kind: PreviewKind::Markdown,
-            },
-            &self.spatial_context(),
-        );
-        self.apply_spatial_outcome(outcome);
+        if self.focused().language != "markdown"
+            && !self.focused().name.ends_with(".md")
+            && self.focused().name != "welcome"
+        {
+            // Still allow preview of the focused buffer as markdown-ish text.
+            self.set_language("markdown");
+        }
+        self.open_markdown_preview();
+        self.notice = "markdown preview".into();
     }
 
     fn handle_spatial(&mut self, key: CommandKey) {
@@ -4334,18 +4948,6 @@ impl EditorApp {
                     self.spatial_cursor = (self.spatial_cursor + 1).min(self.spatial_lines.len() - 1);
                 }
             }
-            CommandKey::Backspace if self.spatial.active_mode == SpatialMode::Lens => {
-                if self.spatial_filter.pop().is_some() {
-                    self.refresh_symbol_lens();
-                }
-            }
-            CommandKey::Char(ch)
-                if self.spatial.active_mode == SpatialMode::Lens
-                    && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') =>
-            {
-                self.spatial_filter.push(ch);
-                self.refresh_symbol_lens();
-            }
             CommandKey::Enter => match self.spatial.active_mode {
                 SpatialMode::Overview => {
                     if let Some(overview) = self.spatial.overview.clone() {
@@ -4359,20 +4961,6 @@ impl EditorApp {
                             self.apply_spatial_outcome(outcome);
                         }
                     }
-                }
-                SpatialMode::Lens => {
-                    let Some(row) = self.spatial_lines.get(self.spatial_cursor) else {
-                        return;
-                    };
-                    let Some(line) = parse_outline_line(row) else {
-                        return;
-                    };
-                    let outcome = self
-                        .spatial
-                        .dispatch(SpatialAction::CloseSpatial, &self.spatial_context());
-                    self.apply_spatial_outcome(outcome);
-                    self.jump_lines(LineJump::Absolute(line));
-                    self.notice = format!("jumped to line {line}");
                 }
                 SpatialMode::Structural => {
                     let outcome = self
@@ -4391,8 +4979,7 @@ impl EditorApp {
 
     fn spatial_save_snapshot(&mut self) {
         if ide_spatial::SnapshotStore::opt_out(&self.workspace) {
-            self.notice =
-                "spatial snapshots opted out — remove .posit/spatial-opt-out to enable".into();
+            self.notice = "spatial snapshots opted out".into();
             return;
         }
         let panes = self
@@ -4419,27 +5006,32 @@ impl EditorApp {
     }
 
     fn handle_palette(&mut self, key: CommandKey) {
+        // OSC color probes used to leak `rgb:RR/GG/BB` onto stdin; strip junk.
+        if self.query.contains("rgb:") || self.query.contains('\u{1b}') {
+            self.query.clear();
+        }
         match key {
             CommandKey::CtrlQ | CommandKey::CtrlP | CommandKey::Esc => self.palette = false,
             CommandKey::Backspace => {
                 self.query.pop();
             }
-            CommandKey::Char(ch) => self.query.push(ch),
-            CommandKey::Tab => {
-                let comps = palette::completions(&self.query);
-                let Some(top) = comps.first().copied() else {
+            CommandKey::Char(ch) => {
+                // Ignore ESC/BEL fragments of OSC replies that survived drain.
+                if ch == '\u{1b}' || ch == '\u{7}' {
                     return;
-                };
-                let current = palette::normalize(&self.query).to_ascii_lowercase();
-                if top != current.as_str() {
-                    self.query = top.to_string();
-                    self.notice = format!("Tab → :{top} · Enter runs");
+                }
+                self.query.push(ch);
+                if self.query.contains("rgb:") {
+                    self.query.clear();
                 }
             }
             CommandKey::Enter => {
                 let raw = self.query.trim().to_string();
                 self.query.clear();
                 self.palette = false;
+                if raw.contains("rgb:") {
+                    return;
+                }
                 if let Some(setting) = raw.strip_prefix("dlc ") {
                     self.dlc_setting(setting.trim());
                     return;
@@ -4457,8 +5049,7 @@ impl EditorApp {
                     palette::Effect::UndoEdit => self.focused_mut().undo(),
                     palette::Effect::FormatBuffer => self.format_now(),
                     palette::Effect::ShowHelp => {
-                        self.help = true;
-                        self.help_scroll = 0;
+                        self.open_help();
                     }
                     palette::Effect::OpenFiles => self.open_yazi(),
                     palette::Effect::FindFiles => self.open_finder(FinderKind::Files),
@@ -4471,27 +5062,14 @@ impl EditorApp {
                         } else if matches!(raw.trim(), "rn" | "relative" | "relativenumber") {
                             self.gutter.relative_numbers = !self.gutter.relative_numbers;
                             self.notice = if self.gutter.relative_numbers {
-                                "relative line numbers on · rn again for absolute".into()
+                                "relative line numbers on".into()
                             } else {
-                                "absolute line numbers · rn for relative".into()
+                                "absolute line numbers".into()
                             };
                         } else if matches!(raw.trim(), "hints" | "hover-hints" | "hoverhints") {
                             self.toggle_hover_hints();
-                        } else if matches!(raw.trim(), "freeze" | "canvas-freeze" | "cf") {
-                            self.toggle_canvas_frozen();
-                        } else if matches!(raw.trim(), "thaw" | "canvas-thaw" | "unfreeze") {
-                            self.canvas_frozen = false;
-                            self.notice = "Canvas live".into();
-                        } else if matches!(raw.trim(), "minimap" | "mm") {
-                            self.toggle_minimap();
-                        } else if let Some(hint) = palette::suggest(&raw) {
-                            self.notice = format!(
-                                "unknown :{raw} — did you mean :{hint}? · F1 lists keys"
-                            );
                         } else {
-                            self.notice = format!(
-                                "unknown :{raw} — F1 lists keys · try rn, freeze, thaw, minimap"
-                            );
+                            self.notice = format!("unknown command: {raw}");
                         }
                     }
                 }
@@ -4592,7 +5170,7 @@ impl EditorApp {
             self.focus = self.buffers.len() - 1;
         }
         self.target = self.focus as f32 * self.stride as f32;
-        self.notice = "buffer closed — o opens files · ll finds by name".into();
+        self.notice = "closed".to_string();
     }
 
     fn relocate(&mut self, to: usize) {
@@ -4648,16 +5226,16 @@ impl EditorApp {
         self.overlay = Overlay::None;
         let name = name.trim().to_string();
         if name.is_empty() || name.contains('/') || name.contains('\0') {
-            self.notice = "rename needs a plain file name (no /)".into();
+            self.notice = "rename needs a file name".to_string();
             return;
         }
         let Some(path) = self.focused().path.clone() else {
-            self.notice = "rename needs a saved file — s to save first".into();
+            self.notice = "rename needs a path".to_string();
             return;
         };
         let dest = path.parent().unwrap_or(Path::new(".")).join(&name);
         if dest.exists() {
-            self.notice = format!("rename blocked — {name} already exists");
+            self.notice = "rename target exists".to_string();
             return;
         }
         match std::fs::rename(&path, &dest) {
@@ -4682,11 +5260,9 @@ impl EditorApp {
         }
         let Some((program, args)) = task_line(&language, path.as_deref(), run) else {
             self.notice = if run {
-                format!("no run for {language} — save a known source file, or open the project root")
+                "no run for this language".to_string()
             } else {
-                format!(
-                    "no build for {language} — open the project root (Cargo/Gradle/CMake/…)"
-                )
+                "no build for this language".to_string()
             };
             return;
         };
@@ -4698,7 +5274,7 @@ impl EditorApp {
 
     fn run_c(&mut self, path: Option<&Path>, cwd: &Path) {
         let Some(file) = path else {
-            self.notice = "run needs a saved .c file — s to save, or o to open one".into();
+            self.notice = "run needs a path".to_string();
             return;
         };
         let out = std::env::temp_dir().join(format!("axiom-run-{}", std::process::id()));
@@ -4848,8 +5424,7 @@ impl EditorApp {
     fn workbench(&mut self, action: WorkbenchAction) {
         let Some(script) = find_dlc_script() else {
             self.show_output("*workbench*", "dlc.py is not installed\n");
-            self.notice =
-                "workbench unavailable — install DLC scripts or open a detected project root".into();
+            self.notice = "workbench unavailable".to_string();
             return;
         };
         match action {
@@ -4896,7 +5471,7 @@ impl EditorApp {
                 self.pending_plan = None;
                 let text = self.dlc_text(&script, &["config".into()]);
                 self.show_output("*workbench*", &text);
-                self.notice = "configuration preview — see *workbench* · : dlc trust to apply".into();
+                self.notice = "configuration preview".to_string();
             }
             WorkbenchAction::Build => self.plan_action(&script, "build"),
             WorkbenchAction::Run => self.plan_action(&script, "run"),
@@ -4994,15 +5569,30 @@ impl EditorApp {
             return;
         }
         // Dedicated right-side Canvas: add a tab; prior tabs stay open.
-        match canvas::CanvasSurface::start(runtime_id, &cwd, &program, &args) {
+        // Seed from session cache so a prior capture paints instantly.
+        match canvas::CanvasSurface::start_with_cache(
+            runtime_id,
+            &cwd,
+            &program,
+            &args,
+            Some(&self.canvas_frame_cache),
+        ) {
             Ok(surface) => {
+                let seeded = surface.has_frame();
+                let image_id = surface.next_image_id();
                 self.canvas_surfaces.push(surface);
                 self.runtime_dock = Some(runtime_id.to_string());
                 self.canvas_painted_size = None;
-                self.canvas_image_id = None;
+                self.canvas_image_id = Some(image_id);
                 self.canvas_chrome_dirty.set(true);
+                self.canvas_placeholders_stale.set(true);
                 self.focus_pane(PaneFocus::Runtime);
-                self.notice = if self.canvas_surfaces.len() > 1 {
+                self.notice = if seeded {
+                    format!(
+                        "{} canvas (cached)",
+                        Self::canvas_tab_label(runtime_id)
+                    )
+                } else if self.canvas_surfaces.len() > 1 {
                     format!("{} tab open", Self::canvas_tab_label(runtime_id))
                 } else {
                     "canvas open".into()
@@ -5047,20 +5637,9 @@ impl EditorApp {
             self.show_output("*workbench*", &scan);
             let hint = match self.language() {
                 "java" | "kotlin" => {
-                    "no Gradle/Maven root — open the folder with build.gradle or pom.xml"
+                    "no Gradle/Maven root found — open the IntelliJ project folder (with build.gradle or pom.xml), or : dlc gradle"
                 }
-                "rust" => "no Cargo.toml here — open the crate/workspace root",
-                "nix" => "no flake.nix/shell.nix here — open the Nix project root",
-                "swift" => "no Package.swift / .xcodeproj here — open the SwiftPM or Xcode root",
-                "c" | "objc" | "objective-c" | "objective-cpp" | "objcpp" => {
-                    "no CMakeLists.txt / Makefile / .xcodeproj — open the build root"
-                }
-                "javascript" | "typescript" => {
-                    "no package.json here — open the Node project root"
-                }
-                "zig" => "no build.zig here — open the Zig project root",
-                "python" => "no project markers — open the repo root, or run with r on a .py file",
-                _ => "no build system detected — open the project root (Cargo/Gradle/CMake/…)",
+                _ => "no build system detected; open the project root or : dlc cargo",
             };
             self.notice = hint.to_string();
             return;
@@ -5118,9 +5697,9 @@ impl EditorApp {
             Ok((ok, text)) => {
                 self.show_output("*workbench*", &text);
                 self.notice = if ok {
-                    "plan finished — see *workbench* output".into()
+                    "plan finished".to_string()
                 } else {
-                    "plan failed — see *workbench* output".into()
+                    "plan failed".to_string()
                 };
             }
             Err(detail) => self.notice = detail,
@@ -5212,18 +5791,19 @@ impl EditorApp {
     }
 
     fn layout_window(&self, content: Rect, orientation: Axis) -> Window {
+        let (tiles, _) = self.content_tiles_and_strip(content);
         let custom = (self.show_many && self.buffers.len() >= 2 && orientation == self.axis)
             .then_some(self.tile_spans.as_deref())
             .flatten();
         match custom {
             Some(spans) => layout::window_spans(
-                content,
+                tiles,
                 orientation,
                 self.show_many,
                 self.buffers.len(),
                 Some(spans),
             ),
-            None => layout::window(content, orientation, self.show_many, self.buffers.len()),
+            None => layout::window(tiles, orientation, self.show_many, self.buffers.len()),
         }
     }
 
@@ -5270,7 +5850,7 @@ impl EditorApp {
         let gutter_w = self.gutter.width_for(line_count);
         let visible = self.visible_rows().max(1);
         let line_count = self.focused().document.len_lines().max(1);
-        let (minimap_w, scroll_w) = self.edge_chrome(tile_w, line_count, visible);
+        let (minimap_w, scroll_w) = self.focused_edge_chrome(tile_w, line_count, visible);
         tile_w
             .saturating_sub(2)
             .saturating_sub(gutter_w)
@@ -5319,7 +5899,8 @@ impl EditorApp {
     fn snap_scroll(&mut self, line: usize) {
         let max = self.scroll_limit() as usize;
         self.focused_mut().scroll = line.min(max);
-        self.wheel_at = None;
+        // Pause Kitty minimap for keyboard scroll the same as wheel scroll.
+        self.wheel_at = Some(Instant::now());
     }
 
     fn scroll_page(&mut self, delta: isize) {
@@ -5379,12 +5960,10 @@ impl EditorApp {
             }
             FormatOutcome::Unchanged => self.notice = "already formatted".to_string(),
             FormatOutcome::Unavailable { program } if program == "none" => {
-                self.notice =
-                    format!("no formatter for {language} — ff needs a language tool on PATH");
+                self.notice = format!("no formatter for {language}");
             }
             FormatOutcome::Unavailable { program } => {
-                self.notice =
-                    format!("install `{program}` (or put it on PATH) to format {language}");
+                self.notice = format!("formatter unavailable: {program}");
             }
             FormatOutcome::Failed { detail, .. } => {
                 self.notice = format!("format failed: {detail}");
@@ -5402,7 +5981,7 @@ impl EditorApp {
             return false;
         }
         let Some(path) = self.buffers[index].path.clone() else {
-            self.notice = "save needs a path — rr to name the buffer, or o to open a file".into();
+            self.notice = "save needs a path".to_string();
             return false;
         };
         match std::fs::write(&path, self.buffers[index].text()) {
@@ -5431,7 +6010,6 @@ impl EditorApp {
         };
         self.buffers.push(EditBuffer::from_text(name, "", "plain"));
         self.focus_at(self.buffers.len() - 1);
-        self.notice = "untitled buffer — rr names it · o opens a file".into();
     }
 
     fn scroll_help(&mut self, delta: isize) {
@@ -5440,22 +6018,15 @@ impl EditorApp {
         } else {
             self.help_scroll = self.help_scroll.saturating_add(delta as usize);
         }
-        let body = layout::chrome(
-            Rect::new(0, 0, self.width, self.height),
-            false,
-            self.sidebar,
-            self.chat,
-            self.tree_width,
-            self.agent_width,
-            layout::TerminalPane {
-                open: self.terminals.open,
-                rows: self.terminal_rows,
-            },
-        )
-        .editor;
-        let visible = inset(body).height as usize;
-        let max_scroll = help_text().lines().count().saturating_sub(visible.max(1));
+        let visible = self.height.saturating_sub(2).max(1) as usize;
+        let max_scroll = if let Some(doc) = self.help_doc.as_ref() {
+            doc.total_rows.saturating_sub(visible)
+        } else {
+            let rendered = markdown_preview::render(&help_markdown(), self.width.max(8) as usize);
+            rendered.lines.len().saturating_sub(visible)
+        };
         self.help_scroll = self.help_scroll.min(max_scroll);
+        // Scroll is a crop placement only — never retransmit the retained PNG.
     }
 
     #[cfg(test)]
@@ -5531,11 +6102,14 @@ impl EditorApp {
         buffer.path = Some(path);
         self.buffers.push(buffer);
         self.focus_at(self.buffers.len() - 1);
+        if self.focused().language == "markdown" {
+            self.open_markdown_preview();
+        }
     }
 
     fn open_picked(&mut self, paths: &[PathBuf]) {
         if paths.is_empty() {
-            self.notice = "no file chosen — o opens the file browser, ll finds by name".into();
+            self.notice = "no file chosen".to_string();
             return;
         }
         for path in paths {
@@ -5952,7 +6526,6 @@ impl EditorApp {
             .as_ref()
             .and_then(|yazi| yazi.cwd.parent().map(Path::to_path_buf))
         else {
-            self.notice = "already at the top — Esc closes · ll finds by name".into();
             return;
         };
         if parent.as_path()
@@ -5962,7 +6535,6 @@ impl EditorApp {
                 .map(|yazi| yazi.cwd.as_path())
                 .unwrap_or(Path::new(""))
         {
-            self.notice = "already at the top — Esc closes · ll finds by name".into();
             return;
         }
         if let Some(yazi) = self.yazi.as_mut() {
@@ -6031,6 +6603,11 @@ impl EditorApp {
 
 pub fn draw(frame: &mut Frame, app: &EditorApp) {
     let area = frame.area();
+    // Full-screen Help replaces the entire terminal (edocview-style doc preview).
+    if app.help {
+        draw_help_fullscreen(frame, app, area);
+        return;
+    }
     let chrome = app.frame_chrome(area);
     let gaze = if app.editing { "EDIT" } else { "VIEW" };
     let help_hover = app
@@ -6039,6 +6616,9 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
     let hints_hover = app
         .hover
         .is_some_and(|(column, row)| hints_hit(column, row, area));
+    let settings_hover = app
+        .hover
+        .is_some_and(|(column, row)| settings_hit(column, row, area));
     let quit_hover = app
         .hover
         .is_some_and(|(column, row)| quit_hit(column, row, area));
@@ -6051,8 +6631,8 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         help_hover,
         hints_hover,
         app.hover_hints,
+        settings_hover,
         quit_hover,
-        app.minimap_theme.is_light(),
     ))
     .style(
         Style::default()
@@ -6075,12 +6655,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         app.hover
             .and_then(|(column, row)| toolbar_hit(chrome.toolbar, column, row)),
     );
-    if app.help {
-        let body = Paragraph::new(help_text())
-            .scroll((app.help_scroll.min(u16::MAX as usize) as u16, 0))
-            .block(Block::default().title("Help").borders(Borders::ALL));
-        frame.render_widget(body, chrome.editor);
-    } else if app.finder.is_some() {
+    if app.finder.is_some() {
         frame.render_widget(finder_paragraph(app), chrome.editor);
     } else if matches!(app.overlay, Overlay::Settings) {
         frame.render_widget(settings_paragraph(app), chrome.editor);
@@ -6093,7 +6668,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                 let inner = inset(chrome.tree);
                 let visible = inner.height.max(1) as usize;
                 let total = app.tree.len().max(1);
-                scrollbar::paint_with(
+                scrollbar::paint(
                     frame.buffer_mut(),
                     Rect {
                         x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -6106,20 +6681,16 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                         visible,
                         total,
                     },
-                    scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
                 );
             } else {
-                frame.render_widget(
-                    sidebar_rail(app.hover_in(chrome.tree), app.minimap_theme.is_light()),
-                    chrome.tree,
-                );
+                frame.render_widget(sidebar_rail(app.hover_in(chrome.tree)), chrome.tree);
             }
         }
         if chrome.agent.width > 4 {
             frame.render_widget(agent_paragraph(app, chrome.agent), chrome.agent);
             let inner = inset(chrome.agent);
             let total = app.agent_log.len().max(1) + 2;
-            scrollbar::paint_with(
+            scrollbar::paint(
                 frame.buffer_mut(),
                 Rect {
                     x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -6132,20 +6703,40 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     visible: inner.height.max(1) as usize,
                     total,
                 },
-                scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
             );
         } else if chrome.agent.width > 0 {
-            frame.render_widget(
-                agent_rail(app.hover_in(chrome.agent), app.minimap_theme.is_light()),
-                chrome.agent,
-            );
+            frame.render_widget(agent_rail(app.hover_in(chrome.agent)), chrome.agent);
         }
         if chrome.canvas.width > 0 && app.canvas_open() {
+            // Mid-drag: cheap border chrome only — no Clear, no markdown re-render,
+            // no Kitty placeholder rewrite. Full refresh happens on mouse-up.
+            if app.canvas_resize {
+                let kind = app.runtime_dock.as_deref().unwrap_or("");
+                let title = if kind == "markdown" { "Preview" } else { "Canvas" };
+                let border = panel_border(true, false, false, true);
+                let media = canvas_media_rect(chrome.canvas);
+                let media_h = media.height.max(1) as usize;
+                let lines: Vec<Line<'static>> = (0..media_h).map(|_| Line::from("")).collect();
+                frame.render_widget(
+                    Paragraph::new(Text::from(lines)).block(
+                        Block::default()
+                            .title(title)
+                            .title(
+                                Line::from(TuiSpan::styled(
+                                    " resize ",
+                                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                                ))
+                                .alignment(Alignment::Right),
+                            )
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(border)),
+                    ),
+                    chrome.canvas,
+                );
+            } else {
             // Leave Canvas cells alone while the editor scrolls — Clear would wipe
             // Kitty placeholders and force a full PNG re-upload every wheel tick.
-            let paint_chrome = app.canvas_chrome_dirty.get()
-                || app.canvas_resize
-                || app.canvas_painted_size.is_none();
+            let paint_chrome = app.canvas_chrome_dirty.get() || app.canvas_painted_size.is_none();
             if paint_chrome {
                 let hover_canvas = app.hover_in(chrome.canvas);
                 let border = panel_border(
@@ -6153,7 +6744,6 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     hover_canvas && app.pane_focus() != PaneFocus::Runtime,
                     false,
                     true,
-                    app.minimap_theme.is_light(),
                 );
                 let close_hot = app.hover.is_some_and(|(c, r)| {
                     app.canvas_title_hit(c, r, &chrome) == Some(CanvasTitleHit::Close)
@@ -6179,7 +6769,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                                     .fg(Color::Cyan)
                                     .add_modifier(Modifier::BOLD)
                             } else {
-                                Style::default().fg(muted_fg(app.minimap_theme.is_light()))
+                                Style::default().fg(Color::DarkGray)
                             },
                         ));
                     }
@@ -6197,25 +6787,62 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                             .add_modifier(Modifier::BOLD)
                     },
                 ));
-                // Media area stays blank so Kitty placeholders are not fighting
-                // leftover hint text. Controls live on the bottom strip.
+                // Media area stays blank for Kitty surfaces. Markdown Preview
+                // paints a rendered document instead.
                 let kind = app.runtime_dock.as_deref().unwrap_or("");
                 let target = app.canvas_active().map(|s| s.target.as_str());
                 let controls = EditorApp::canvas_control_line(kind, target);
                 let media = canvas_media_rect(chrome.canvas);
                 let media_h = media.height.max(1) as usize;
-                let mut lines: Vec<Line<'static>> = (0..media_h)
-                    .map(|_| Line::from(""))
-                    .collect();
-                lines.push(Line::from(TuiSpan::styled(
-                    controls,
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                )));
+                let mut lines: Vec<Line<'static>> = if kind == "markdown" {
+                    let body_h = media_h.saturating_sub(1).max(1);
+                    if markdown_uses_kitty(app) {
+                        // edocview Kitty crop covers the body; keep cells empty.
+                        (0..body_h).map(|_| Line::from("")).collect()
+                    } else {
+                        let inner_w = media.width.max(1) as usize;
+                        let preview = markdown_preview::render(
+                            &app.markdown_preview_source(),
+                            inner_w.saturating_sub(1).max(8),
+                        );
+                        let scroll = app.markdown_preview_scroll as usize;
+                        let mut out: Vec<Line<'static>> = preview
+                            .lines
+                            .into_iter()
+                            .skip(scroll)
+                            .take(body_h)
+                            .collect();
+                        while out.len() < body_h {
+                            out.push(Line::from(""));
+                        }
+                        out
+                    }
+                } else {
+                    (0..media_h.saturating_sub(1).max(1))
+                        .map(|_| Line::from(""))
+                        .collect()
+                };
+                if kind != "markdown" {
+                    lines.push(Line::from(TuiSpan::styled(
+                        controls,
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(TuiSpan::styled(
+                        " Preview  ·  scroll with wheel  ·  zp toggles ",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                let title = if kind == "markdown" {
+                    "Preview"
+                } else {
+                    "Canvas"
+                };
                 frame.render_widget(Clear, chrome.canvas);
                 frame.render_widget(
                     Paragraph::new(Text::from(lines)).block(
                         Block::default()
-                            .title("Canvas")
+                            .title(title)
                             .title(Line::from(right).alignment(Alignment::Right))
                             .borders(Borders::ALL)
                             .border_style(Style::default().fg(border)),
@@ -6223,8 +6850,53 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     chrome.canvas,
                 );
                 app.canvas_chrome_dirty.set(false);
-                app.canvas_placeholders_stale.set(true);
+                if kind != "markdown" {
+                    app.canvas_placeholders_stale.set(true);
+                }
+            } else if app.runtime_dock.as_deref() == Some("markdown") {
+                // Text fallback refresh while scrolling. Kitty path re-places crops
+                // in paint_markdown_canvas_graphics without rewriting chrome.
+                if !markdown_uses_kitty(app) {
+                    let media = canvas_media_rect(chrome.canvas);
+                    let media_h = media.height.max(1) as usize;
+                    let inner_w = media.width.max(1) as usize;
+                    let preview = markdown_preview::render(
+                        &app.markdown_preview_source(),
+                        inner_w.saturating_sub(1).max(8),
+                    );
+                    let scroll = app.markdown_preview_scroll as usize;
+                    let mut lines: Vec<Line<'static>> = preview
+                        .lines
+                        .into_iter()
+                        .skip(scroll)
+                        .take(media_h.saturating_sub(1).max(1))
+                        .collect();
+                    while lines.len() < media_h.saturating_sub(1).max(1) {
+                        lines.push(Line::from(""));
+                    }
+                    lines.push(Line::from(TuiSpan::styled(
+                        " Preview  ·  scroll with wheel  ·  zp toggles ",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    let hover_canvas = app.hover_in(chrome.canvas);
+                    let border = panel_border(
+                        app.pane_focus() == PaneFocus::Runtime,
+                        hover_canvas && app.pane_focus() != PaneFocus::Runtime,
+                        false,
+                        true,
+                    );
+                    frame.render_widget(
+                        Paragraph::new(Text::from(lines)).block(
+                            Block::default()
+                                .title("Preview")
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(border)),
+                        ),
+                        chrome.canvas,
+                    );
+                }
             }
+            } // end non-resize canvas chrome
         }
         let orientation = if area.width == app.width && area.height == app.height {
             app.axis()
@@ -6244,15 +6916,16 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
     if chrome.terminal.height > 0 {
         let hover_col = app.hover.map(|(c, _)| c).unwrap_or(0);
         let hover_row = app.hover.map(|(_, r)| r).unwrap_or(0);
-        let seam_hot = app.on_terminal_seam(hover_col, hover_row)
+        // Seam hover paints only the active edge + pill (see paint_seam_handles).
+        // Never yellow the whole terminal border — that mislabels which side resizes.
+        let seam_edge = app.on_terminal_seam(hover_col, hover_row)
             || app.on_terminal_side_seam(hover_col, hover_row);
-        let hovered = app.hover_in(chrome.terminal) && !seam_hot;
+        let hovered = app.hover_in(chrome.terminal) && !seam_edge;
         let border = panel_border(
             app.terminals.focused(),
             hovered && !app.terminals.focused(),
-            seam_hot,
+            false,
             true,
-            app.minimap_theme.is_light(),
         );
         let local_hover = app.hover.and_then(|(column, row)| {
             contains(chrome.terminal, column, row).then_some((
@@ -6273,7 +6946,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         if chrome.terminal.height > 2 && chrome.terminal.width > 4 {
             let inner = inset(chrome.terminal);
             let (offset, total) = app.terminals.scroll_metrics();
-            scrollbar::paint_with(
+            scrollbar::paint(
                 frame.buffer_mut(),
                 Rect {
                     x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -6286,7 +6959,6 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
                     visible: inner.height.max(1) as usize,
                     total: total.max(1),
                 },
-                scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
             );
         }
     }
@@ -6338,25 +7010,8 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         TuiSpan::raw(status_body),
     ]);
     if app.palette {
-        let comps = palette::completions(&app.query);
-        let mut block = Block::default().title("Palette").borders(Borders::ALL);
-        if !comps.is_empty() {
-            let current = palette::normalize(&app.query).to_ascii_lowercase();
-            let footer = if comps[0] == current.as_str() {
-                format!("Enter runs · {}", comps.join("  "))
-            } else {
-                let rest = comps[1..].join("  ");
-                if rest.is_empty() {
-                    format!("Tab → {} · Enter runs", comps[0])
-                } else {
-                    format!("Tab → {} · {}", comps[0], rest)
-                }
-            };
-            block = block.title_bottom(Line::from(footer));
-        } else if app.query.trim().is_empty() {
-            block = block.title_bottom(Line::from("type a command · Tab completes · Esc closes"));
-        }
-        let palette = Paragraph::new(format!(": {}", app.query)).block(block);
+        let palette = Paragraph::new(format!(": {}", app.query))
+            .block(Block::default().title("Palette").borders(Borders::ALL));
         frame.render_widget(palette, bottom_band(area));
     } else if let Some(prompt) = prompt_line(app) {
         let panel = Paragraph::new(prompt).block(
@@ -6376,7 +7031,11 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         frame.render_widget(Paragraph::new(status_line), text_rect);
         paint_tab(frame, app, status_rect);
     }
-    tint_hover_seams(frame, app);
+    paint_seam_handles(frame, app);
+    paint_buffer_strip(frame, app);
+    if app.flip.open {
+        paint_flip_switcher(frame, app);
+    }
     if app.yazi.is_some() {
         let float = yazi_rect(area);
         frame.render_widget(Clear, float);
@@ -6427,15 +7086,11 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
         ));
     }
     if yazi.items.is_empty() {
-        lines.push(Line::styled(
-            "empty folder — ← or h goes up, Esc closes",
-            Style::default().fg(muted_fg(app.minimap_theme.is_light())),
-        ));
+        lines.push(Line::from("(empty)"));
     }
     Paragraph::new(Text::from(lines)).block(
         Block::default()
-            .title("Open")
-            .title_bottom("Enter open · Esc close · h up · ll find")
+            .title("Yazi")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(focus_color(app.editing))),
     )
@@ -6444,14 +7099,9 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
 fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
     if app.tree_query.is_some() {
         let width = app.tree_rect().width.saturating_sub(2) as usize;
-        let light = app.minimap_theme.is_light();
         let mut lines = vec![Line::styled(
             format!("/{}", app.tree_query.as_deref().unwrap_or("")),
-            Style::default().fg(if light {
-                Color::Rgb(0x9a, 0x67, 0x00)
-            } else {
-                Color::Yellow
-            }),
+            Style::default().fg(Color::Yellow),
         )];
         for (index, hit) in app.tree_hits.iter().enumerate() {
             lines.push(finder::matched_line(
@@ -6459,24 +7109,15 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
                 &hit.positions,
                 index == app.tree_search_cursor,
                 width.max(1),
-                light,
             ));
         }
         if app.tree_hits.is_empty() {
-            lines.push(Line::styled(
-                if app.tree_query.as_deref().unwrap_or("").is_empty() {
-                    "type to filter the file tree"
-                } else {
-                    "no files match — Esc clears the filter"
-                },
-                Style::default().fg(muted_fg(light)),
-            ));
+            lines.push(Line::from("(no match)"));
         }
         return Paragraph::new(Text::from(lines)).block(files_block(
             app.tree_focused,
             false,
             false,
-            light,
         ));
     }
     let inner = app.tree_rect().width.saturating_sub(2) as usize;
@@ -6499,12 +7140,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
         if app.tree_focused && index == app.tree_cursor {
             style = style.add_modifier(Modifier::REVERSED);
         } else if tree_hover(app) == Some(index) {
-            // DarkGray hover wash looks like a hole on cream; use a soft strip.
-            style = style.bg(if app.minimap_theme.is_light() {
-                Color::Rgb(0xe0, 0xdc, 0xcc)
-            } else {
-                Color::DarkGray
-            });
+            style = style.bg(Color::DarkGray);
         }
         lines.push(Line::styled(
             tree_label(&entry.name, entry.depth, marker, inner.max(1)),
@@ -6512,10 +7148,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
         ));
     }
     if lines.is_empty() {
-        lines.push(Line::styled(
-            "empty folder — o opens files, ll finds by name",
-            Style::default().fg(muted_fg(app.minimap_theme.is_light())),
-        ));
+        lines.push(Line::from("(empty)"));
     }
     let tree = app.tree_rect();
     let hovered = app.hover_in(tree) && !app.sidebar_button(
@@ -6529,11 +7162,10 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
             app.tree_focused,
             hovered && !app.tree_focused,
             app.sidebar_title_hot(),
-            app.minimap_theme.is_light(),
         ))
 }
 
-fn files_block(focused: bool, hovered: bool, toggle_hot: bool, light: bool) -> Block<'static> {
+fn files_block(focused: bool, hovered: bool, toggle_hot: bool) -> Block<'static> {
     let mark = if toggle_hot {
         Style::default()
             .fg(Color::Black)
@@ -6548,21 +7180,21 @@ fn files_block(focused: bool, hovered: bool, toggle_hot: bool, light: bool) -> B
         .title("Files")
         .title(Line::from(TuiSpan::styled(" < ", mark)).alignment(Alignment::Right))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(panel_border(focused, hovered, false, false, light)))
+        .border_style(Style::default().fg(panel_border(focused, hovered, false, false)))
 }
 
 fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
     let inner_w = pane.width.saturating_sub(2).max(1) as usize;
     let inner_h = pane.height.saturating_sub(2) as usize;
     let program = if app.agent_program.is_empty() {
-        "no CLI — set IDE_AGENT or install claude/codex/agent".to_string()
+        "no CLI".to_string()
     } else {
         app.agent_program.clone()
     };
     let draft = if app.agent_focused {
         format!("› {}", app.agent_draft)
     } else {
-        "click to ask · Enter sends".to_string()
+        "click to ask".to_string()
     };
     let program_lines = wrap_line(&program, inner_w);
     let draft_lines = wrap_line(&draft, inner_w);
@@ -6580,7 +7212,7 @@ fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
     let draft_style = Style::default().fg(if app.agent_focused {
         focus_color(true)
     } else {
-        muted_fg(app.minimap_theme.is_light())
+        Color::Gray
     });
     lines.extend(
         draft_lines
@@ -6593,12 +7225,12 @@ fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
             app.hover.map(|(c, _)| c).unwrap_or(0),
             app.hover.map(|(_, r)| r).unwrap_or(0),
         );
+    // Seam highlight is edge-only via paint_seam_handles; keep panel chrome stable.
     let border = panel_border(
         app.agent_focused,
         hovered && !app.agent_focused,
-        app.resize_hot(Side::Right),
         false,
-        app.minimap_theme.is_light(),
+        false,
     );
     let toggle = if app.agent_title_hot() {
         Style::default()
@@ -6684,48 +7316,25 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn edge_hit(pane: Rect, column: u16, row: u16, left: bool) -> bool {
-    if pane.width == 0 || row < pane.y || row >= pane.y.saturating_add(pane.height) {
-        return false;
-    }
-    let right = pane.x.saturating_add(pane.width);
-    if pane.width <= 4 {
-        return column >= pane.x && column < right;
-    }
-    if left {
-        column + 1 == right || column == right
-    } else {
-        column == pane.x || column + 1 == pane.x
-    }
-}
-
-fn agent_rail(hot: bool, light: bool) -> Paragraph<'static> {
+fn agent_rail(hot: bool) -> Paragraph<'static> {
     Paragraph::new(">")
         .alignment(Alignment::Center)
         .style(hot_mark(hot))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if hot {
-                    Color::Yellow
-                } else {
-                    panel_border(false, false, false, false, light)
-                })),
+                .border_style(Style::default().fg(if hot { Color::Yellow } else { Color::Gray })),
         )
 }
 
-fn sidebar_rail(hot: bool, light: bool) -> Paragraph<'static> {
+fn sidebar_rail(hot: bool) -> Paragraph<'static> {
     Paragraph::new("<")
         .alignment(Alignment::Center)
         .style(hot_mark(hot))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if hot {
-                    Color::Yellow
-                } else {
-                    panel_border(false, false, false, false, light)
-                })),
+                .border_style(Style::default().fg(if hot { Color::Yellow } else { Color::Gray })),
         )
 }
 
@@ -6746,9 +7355,11 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
     let sidebar = if app.sidebar { "on" } else { "off" };
     let chat = if app.chat { "on" } else { "off" };
     let columns = if app.show_many { "auto" } else { "full" };
-    // Keep this list short so a typical editor pane shows every row (no blank padding).
+    let welcome = if app.show_welcome { "on" } else { "off" };
+    let kitty = if app.kitty_graphics { "on" } else { "off" };
     let rows = [
         "Settings".to_string(),
+        String::new(),
         format!("sidebar   {sidebar}    < or drag"),
         format!(
             "terminal  {}    t",
@@ -6760,27 +7371,10 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
             "tab       {}    Ctrl-Alt-T",
             if app.tab_enabled { "on" } else { "off" }
         ),
-        format!(
-            "relative  {}    rn",
-            if app.gutter.relative_numbers {
-                "on"
-            } else {
-                "off"
-            }
-        ),
-        format!(
-            "canvas    {}    :freeze / :thaw",
-            if app.canvas_frozen {
-                "frozen"
-            } else {
-                "live"
-            }
-        ),
-        format!(
-            "minimap   {}    :minimap or m",
-            if app.minimap_on { "on" } else { "off" }
-        ),
-        "Tab is lexical until a local model is installed.".to_string(),
+        format!("welcome   {welcome}    w — open Welcome.md on startup"),
+        format!("kitty     {kitty}    k — Kitty graphics (minimap/Canvas/Flip)"),
+        "Tab completion is local and lexical until a model is installed.".to_string(),
+        String::new(),
         "Esc or ; closes".to_string(),
     ];
     let lines = rows
@@ -6857,56 +7451,191 @@ fn line_span_width(line: &Line<'_>) -> usize {
         .sum()
 }
 
-fn tint_hover_seams(frame: &mut Frame, app: &EditorApp) {
-    let Some((column, row)) = app.hover else {
-        return;
-    };
+/// Idle split pills + hover edge highlight. Only the active edge lights up.
+fn paint_buffer_strip(frame: &mut Frame, app: &EditorApp) {
     let area = frame.area();
     let chrome = app.frame_chrome(area);
-    let left = app.seam(&chrome, column, row) == Some(Side::Left) && chrome.tree.width > 0;
-    let right = app.seam(&chrome, column, row) == Some(Side::Right) && chrome.agent.width > 0;
-    let tile = app.tile_seam(column, row).and_then(|index| {
-        let window = app.window();
-        layout::tile_slice(window, index, app.view)
-    });
-    let terminal = app
-        .on_terminal_seam(column, row)
-        .then(|| app.terminal_rect());
-    let canvas_seam = app.on_canvas_seam(column, row, &chrome) || app.canvas_resize;
+    let (_, strip) = app.content_tiles_and_strip(chrome.content);
+    if strip.width < 2 || strip.height == 0 || app.buffers.is_empty() {
+        return;
+    }
+    let metrics = app.buffer_strip_metrics();
+    scrollbar::paint_horizontal(frame.buffer_mut(), strip, metrics);
+    // Focus name chip on the strip for glanceability.
+    let name = app.focused().name.chars().take(16).collect::<String>();
+    let label = format!(" {}/{} · {name} ", app.focus + 1, app.buffers.len());
+    let style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let x0 = strip
+        .x
+        .saturating_add(strip.width.saturating_sub(label.chars().count() as u16) / 2);
+    for (i, ch) in label.chars().enumerate() {
+        let x = x0.saturating_add(i as u16);
+        if x >= strip.x.saturating_add(strip.width) {
+            break;
+        }
+        let cell = &mut frame.buffer_mut()[(x, strip.y)];
+        cell.set_symbol(&ch.to_string());
+        cell.set_style(style);
+    }
+}
+
+fn paint_flip_switcher(frame: &mut Frame, app: &EditorApp) {
+    let area = frame.area();
+    let chrome = app.frame_chrome(area);
+    let (tiles, _) = app.content_tiles_and_strip(chrome.content);
+    if tiles.width < 8 || tiles.height < 6 {
+        return;
+    }
+    // Text fallback always paints; Kitty composites over placeholders in present().
+    let cards = app.flip_cards();
+    flip3d::paint_text_fallback(
+        frame,
+        tiles,
+        &cards,
+        app.flip.scroll,
+        app.flip.selected,
+    );
+}
+
+fn paint_seam_handles(frame: &mut Frame, app: &EditorApp) {
+    let area = frame.area();
+    let chrome = app.frame_chrome(area);
+    let hover = app.hover;
     let buf = frame.buffer_mut();
-    let paint = |buf: &mut ratatui::buffer::Buffer, x: u16, y: u16| {
-        if x < area.right() && y < area.bottom() {
-            buf[(x, y)].set_fg(Color::Yellow);
-        }
-    };
-    if left {
-        let x = chrome.tree.right().saturating_sub(1);
-        for y in chrome.tree.y..chrome.tree.bottom() {
-            paint(buf, x, y);
-        }
-    }
-    if right {
-        let x = chrome.agent.x;
-        for y in chrome.agent.y..chrome.agent.bottom() {
-            paint(buf, x, y);
+
+    let mut idle: Vec<seams::SeamVisual> = Vec::new();
+    let mut active: Option<seams::SeamVisual> = None;
+
+    if chrome.tree.width > 4 {
+        if let Some(seam) = seams::left_pane_seam(chrome.tree) {
+            idle.push(seam);
+            if hover.is_some_and(|(c, r)| app.seam(&chrome, c, r) == Some(Side::Left))
+                || app.resize == Some(Side::Left)
+            {
+                active = Some(seam);
+            }
         }
     }
-    if let Some(slice) = tile {
-        let x = slice.screen_x.saturating_add(slice.width).saturating_sub(1);
-        for y in slice.screen_y..slice.screen_y.saturating_add(slice.height) {
-            paint(buf, x, y);
+    if chrome.agent.width > 4 {
+        if let Some(seam) = seams::right_pane_seam(chrome.agent) {
+            idle.push(seam);
+            if hover.is_some_and(|(c, r)| app.seam(&chrome, c, r) == Some(Side::Right))
+                || app.resize == Some(Side::Right)
+            {
+                active = Some(seam);
+            }
         }
     }
-    if let Some(rect) = terminal {
-        let y = rect.y.saturating_sub(1);
-        for x in rect.x..rect.right() {
-            paint(buf, x, y);
+    if chrome.canvas.width > 0 && app.canvas_open() {
+        if let Some(seam) = seams::right_pane_seam(chrome.canvas) {
+            idle.push(seam);
+            if hover.is_some_and(|(c, r)| app.on_canvas_seam(c, r, &chrome)) || app.canvas_resize
+            {
+                active = Some(seam);
+            }
         }
     }
-    if canvas_seam && chrome.canvas.width > 0 {
-        let x = chrome.canvas.x;
-        for y in chrome.canvas.y..chrome.canvas.bottom() {
-            paint(buf, x, y);
+    if chrome.terminal.height > 0 {
+        if let Some(seam) = seams::bottom_pane_seam(chrome.terminal) {
+            idle.push(seam);
+            if hover.is_some_and(|(c, r)| app.on_terminal_seam(c, r)) || app.terminal_drag {
+                active = Some(seam);
+            }
+        }
+        // Session-list divider inside the terminal pane.
+        if chrome.terminal.height > 2 {
+            let term = chrome.terminal;
+            if let Some(local_x) = app.terminals.side_divider_x(term.width) {
+                let seam = seams::SeamVisual::vertical(
+                    term.x.saturating_add(local_x),
+                    term.y.saturating_add(1),
+                    term.height.saturating_sub(2).max(1),
+                );
+                idle.push(seam);
+                if hover.is_some_and(|(c, r)| app.on_terminal_side_seam(c, r))
+                    || app.terminal_side_drag
+                {
+                    active = Some(seam);
+                }
+            }
+        }
+    }
+    // Text buffers: trailing-edge pills only (right / bottom), including the last.
+    if !app.buffers.is_empty() {
+        if app.show_many {
+            let window = app.window();
+            for index in 0..app.buffers.len() {
+                let Some(slice) = layout::tile_slice(window, index, app.view) else {
+                    continue;
+                };
+                let (tile_w, tile_h) = window.tile_box(index);
+                let seam = match window.axis {
+                    Axis::Horizontal if slice.source_x + slice.width == tile_w => {
+                        let x = slice.screen_x.saturating_add(slice.width).saturating_sub(1);
+                        Some(seams::SeamVisual::vertical(
+                            x,
+                            slice.screen_y,
+                            slice.height.max(1),
+                        ))
+                    }
+                    Axis::Vertical if slice.source_y + slice.height == tile_h => {
+                        let y = slice
+                            .screen_y
+                            .saturating_add(slice.height)
+                            .saturating_sub(1);
+                        Some(seams::SeamVisual::horizontal(
+                            slice.screen_x,
+                            y,
+                            slice.width.max(1),
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(seam) = seam {
+                    idle.push(seam);
+                    if hover.is_some_and(|(c, r)| app.tile_seam(c, r) == Some(index))
+                        || app.tile_drag == Some(index)
+                    {
+                        active = Some(seam);
+                    }
+                }
+            }
+        } else if app.buffers.len() >= 2 {
+            // Full mode: trailing-edge pill on the focused buffer only.
+            let (tiles, _) = app.content_tiles_and_strip(chrome.content);
+            let focus = app.focus.min(app.buffers.len() - 1);
+            if let Some(seam) = match app.axis {
+                Axis::Horizontal => seams::right_pane_seam(tiles),
+                Axis::Vertical => Some(seams::SeamVisual::horizontal(
+                    tiles.x,
+                    tiles.y.saturating_add(tiles.height.saturating_sub(1)),
+                    tiles.width,
+                )),
+            } {
+                idle.push(seam);
+                if hover.is_some_and(|(c, r)| app.tile_seam(c, r) == Some(focus))
+                    || app.tile_drag == Some(focus)
+                {
+                    active = Some(seam);
+                }
+            }
+        }
+    }
+
+    for seam in idle {
+        let is_active = active.is_some_and(|a| {
+            a.line.x == seam.line.x
+                && a.line.y == seam.line.y
+                && a.line.width == seam.line.width
+                && a.line.height == seam.line.height
+        });
+        if is_active {
+            seams::paint(buf, area, seam, true);
+        } else {
+            seams::paint_idle(buf, area, seam);
         }
     }
 }
@@ -6944,6 +7673,48 @@ fn tab_bounds(enabled: bool, status: TabStatus, area: Rect) -> Rect {
     }
 }
 
+fn load_setting_bool(workspace: &Path, key: &str, default: bool) -> bool {
+    let path = workspace.join(".posit/settings.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return default;
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|value| value.get(key)?.as_bool())
+        .unwrap_or(default)
+}
+
+fn persist_setting_bool(workspace: &Path, key: &str, value: bool) {
+    let dir = workspace.join(".posit");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = dir.join("settings.json");
+    let mut map = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    map.insert(key.into(), serde_json::Value::Bool(value));
+    let _ = std::fs::write(path, format!("{}\n", serde_json::Value::Object(map)));
+}
+
+fn load_show_welcome(workspace: &Path) -> bool {
+    load_setting_bool(workspace, "show_welcome", true)
+}
+
+fn persist_show_welcome(workspace: &Path, show_welcome: bool) {
+    persist_setting_bool(workspace, "show_welcome", show_welcome);
+}
+
+fn load_kitty_graphics(workspace: &Path) -> bool {
+    load_setting_bool(workspace, "kitty_graphics", true)
+}
+
+fn persist_kitty_graphics(workspace: &Path, enabled: bool) {
+    persist_setting_bool(workspace, "kitty_graphics", enabled);
+}
+
 fn local_tab_enabled(workspace: &Path) -> bool {
     let path = workspace.join(".posit/local-tab.json");
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -6974,7 +7745,6 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
         FinderKind::Buffers => "Buffers",
     };
     let width = app.width.saturating_sub(4) as usize;
-    let light = app.minimap_theme.is_light();
     let mut lines = vec![Line::styled(
         format!("> {}", finder.query),
         Style::default().fg(Color::Cyan),
@@ -6987,7 +7757,6 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
                     &hit.positions,
                     index == finder.cursor,
                     width.max(1),
-                    light,
                 ));
             }
         }
@@ -7002,34 +7771,23 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
                     offset + hit.end,
                     index == finder.cursor,
                     width.max(1),
-                    light,
                 ));
             }
         }
     }
     if lines.len() == 1 {
-        lines.push(Line::styled(
-            finder_empty_hint(finder.kind, finder.query.is_empty()),
-            Style::default().fg(muted_fg(light)),
-        ));
+        lines.push(Line::from(if finder.query.is_empty() {
+            "type to search"
+        } else {
+            "(no match)"
+        }));
     }
     Paragraph::new(Text::from(lines)).block(
         Block::default()
             .title(title)
-            .title_bottom("Enter open · Tab mode · Esc close")
+            .title("Tab switches")
             .borders(Borders::ALL),
     )
-}
-
-fn finder_empty_hint(kind: FinderKind, query_empty: bool) -> &'static str {
-    match (kind, query_empty) {
-        (FinderKind::Files, true) => "type a path fragment · Tab switches to Grep",
-        (FinderKind::Files, false) => "no files match — try a shorter fragment · Esc closes",
-        (FinderKind::Grep, true) => "type text to search · Tab switches to Find · Esc closes",
-        (FinderKind::Grep, false) => "no matches — shorten the query · Tab → Find · Esc closes",
-        (FinderKind::Buffers, true) => "type to filter open buffers · Tab switches to Find",
-        (FinderKind::Buffers, false) => "no open buffer matches — Esc closes",
-    }
 }
 
 fn finder_len(finder: &Finder) -> usize {
@@ -7052,18 +7810,12 @@ fn paint_spatial(frame: &mut Frame, app: &EditorApp, area: Rect) {
         return;
     }
     let title = match app.spatial.active_mode {
-        SpatialMode::Overview => "Spatial overview".to_string(),
-        SpatialMode::Lens => {
-            if app.spatial_filter.is_empty() {
-                "Symbols".to_string()
-            } else {
-                format!("Symbols /{}", app.spatial_filter)
-            }
-        }
-        SpatialMode::Timeline => "Timeline".to_string(),
-        SpatialMode::Impact => "Change impact".to_string(),
-        SpatialMode::Structural => "Structural edit".to_string(),
-        SpatialMode::Preview => "Preview".to_string(),
+        SpatialMode::Overview => "Spatial overview",
+        SpatialMode::Lens => "Lens",
+        SpatialMode::Timeline => "Timeline",
+        SpatialMode::Impact => "Change impact",
+        SpatialMode::Structural => "Structural edit",
+        SpatialMode::Preview => "Preview",
         SpatialMode::Idle => return,
     };
     let body: Vec<Line> = app
@@ -7076,9 +7828,6 @@ fn paint_spatial(frame: &mut Frame, app: &EditorApp, area: Rect) {
                     .fg(Color::Black)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
-            } else if app.minimap_theme.is_light() {
-                // White-on-cream spatial rows were unreadable on Ghostty default.
-                Style::default().fg(Color::Rgb(0x1a, 0x1a, 0x1a))
             } else {
                 Style::default().fg(Color::White)
             };
@@ -7111,12 +7860,12 @@ fn paint_tile(
             && !app.close_button(window, index, column, row)
     });
     let editor_owns = app.pane_focus() == PaneFocus::Editor;
+    // Tile seam highlight is edge-only (paint_seam_handles); keep chrome stable.
     let border = panel_border(
         editor_owns && index == app.focus,
         tile_hovered && !(editor_owns && index == app.focus),
-        app.hover_tile_seam(index),
+        false,
         app.editing && editor_owns && index == app.focus,
-        app.minimap_theme.is_light(),
     );
     let close_hover = app
         .hover
@@ -7133,12 +7882,20 @@ fn paint_tile(
     };
     let visible = tile_h.saturating_sub(2) as usize;
     let line_count = buffer.document.len_lines().max(1);
+    buffer.ensure_folds();
+    let folds = buffer.folds.borrow();
+    let visible_docs =
+        folds.visible_window(buffer.scroll, visible.max(1).saturating_add(1), line_count);
+    let fold_total = folds.visible_line_count(line_count);
+    let any_collapsed = folds.collapsed_count() > 0;
     let gutter_w = app.gutter.width_for(line_count);
+    // Kitty strip only when settled; during scroll / buffer slide use precision scrollbar.
+    let kitty_minimap = index == app.focus && app.kitty_minimap_enabled();
     let (minimap_w, scroll_w) = if index == app.focus {
-        app.edge_chrome(tile_w, line_count, visible.max(1))
+        app.focused_edge_chrome(tile_w, fold_total, visible.max(1))
     } else {
         // Unfocused tiles: text scrollbar only when scrollable.
-        if minimap_gfx::needs_scroll(line_count, visible.max(1)) {
+        if minimap_gfx::needs_scroll(fold_total, visible.max(1)) {
             (0, 1)
         } else {
             (0, 0)
@@ -7149,19 +7906,61 @@ fn paint_tile(
         .saturating_sub(2)
         .saturating_sub(chrome_w)
         .max(1) as usize;
+    // Obsidian-style: hover peeks one row; caret unconceals the block; selection shows raw.
+    let hover_line = if app.editing && tile_hovered {
+        app.hover.and_then(|(column, row)| {
+            let _ = column;
+            let local_y = row.saturating_sub(slice.screen_y);
+            if local_y == 0 {
+                return None; // title bar
+            }
+            let content_row = (local_y as usize).saturating_sub(1);
+            if content_row >= visible {
+                return None;
+            }
+            folds
+                .doc_line_for_view_row(buffer.scroll, content_row, line_count)
+                .or_else(|| Some(buffer.scroll.saturating_add(content_row)))
+        })
+    } else {
+        None
+    };
+    let cursor_line = (app.editing && index == app.focus).then(|| {
+        buffer.document.char_to_line(buffer.cursor)
+    });
+    let md_reveal = markdown_preview::RevealOpts {
+        hover_line,
+        cursor_line,
+        // View-mode select-all / drag selection also drops render → raw source.
+        selection: buffer.selection,
+    };
     // Only materialize the visible line window — full-buffer paint dominated large-file RSS/CPU.
-    let text = highlighted_window(
-        buffer,
-        index == app.focus,
-        app.editing,
-        width,
-        (index == app.focus)
-            .then_some(app.ghost.as_ref())
-            .flatten(),
-        buffer.scroll,
-        visible.max(1).saturating_add(1),
-        app.minimap_theme,
-    );
+    let text = if any_collapsed {
+        highlighted_doc_lines(
+            buffer,
+            &visible_docs,
+            index == app.focus,
+            app.editing,
+            width,
+            (index == app.focus)
+                .then_some(app.ghost.as_ref())
+                .flatten(),
+            md_reveal,
+        )
+    } else {
+        highlighted_window(
+            buffer,
+            index == app.focus,
+            app.editing,
+            width,
+            (index == app.focus)
+                .then_some(app.ghost.as_ref())
+                .flatten(),
+            buffer.scroll,
+            visible.max(1).saturating_add(1),
+            md_reveal,
+        )
+    };
     let max_x = text
         .lines
         .iter()
@@ -7200,19 +7999,23 @@ fn paint_tile(
         .with_text(|body| line_col(body, buffer.cursor).0)
         .saturating_add(1);
     let path = buffer.path.as_deref();
-    for row in 0..visible.min(inner.height as usize) {
-        let line = buffer.scroll + row + 1;
-        if line > line_count {
+    let gutter_rows = if any_collapsed {
+        visible_docs.clone()
+    } else {
+        (0..visible.min(inner.height as usize))
+            .map(|row| buffer.scroll + row)
+            .filter(|&line| line < line_count)
+            .collect()
+    };
+    for (row, doc_line_0) in gutter_rows.iter().copied().enumerate() {
+        if row >= visible.min(inner.height as usize) {
             break;
         }
-        let spans = app.gutter.line_spans(
-            path,
-            line,
-            caret_line,
-            line_count,
-            gutter_w,
-            app.minimap_theme.is_light(),
-        );
+        let line = doc_line_0 + 1;
+        let chevron = folds.chevron(doc_line_0);
+        let spans = app
+            .gutter
+            .line_spans(path, line, caret_line, line_count, gutter_w, chevron);
         let mut x = inner.x;
         for span in spans {
             let content = span.content.clone();
@@ -7228,42 +8031,18 @@ fn paint_tile(
             }
         }
     }
+    drop(folds);
     if minimap_w > 0 {
         let base_x = inner
             .x
             .saturating_add(inner.width.saturating_sub(minimap_w + scroll_w));
         let theme = app.minimap_theme;
-        // Prefer the probed/host RGB; when we never learned the real bg, Reset
-        // so the strip inherits the terminal instead of a wrong cream/dark guess.
-        let underlay_bg = if minimap_gfx::probed_background().is_some()
-            || std::env::var_os("POSIT_EDIT_MINIMAP_BG").is_some()
-        {
-            Color::Rgb(theme.bg.0, theme.bg.1, theme.bg.2)
-        } else {
-            Color::Reset
-        };
-        if minimap_gfx::host_is_kitty() {
-            // Keep Unicode placeholders in the ratatui buffer (Canvas-style).
-            // Blanking to spaces every scroll wiped the Kitty binding and flashed
-            // the underlay while PNG encode/upload caught up — same class of bug
-            // terminal-phone avoids by alternating buffers without clearing the
-            // visible placeholder grid.
-            if let Some(image_id) = app.editor_minimap_id {
-                let fg = canvas::kitty_placeholder_fg(image_id);
-                let style = Style::default().fg(fg).bg(underlay_bg);
-                let rows = (inner.height as usize).min(255);
-                let cols = (minimap_w as usize).min(255);
-                for row in 0..rows {
-                    for dx in 0..cols {
-                        let cell_ref = &mut screen[(
-                            base_x.saturating_add(dx as u16),
-                            inner.y.saturating_add(row as u16),
-                        )];
-                        cell_ref.set_symbol(&canvas::kitty_placeholder_cell(row, dx));
-                        cell_ref.set_style(style);
-                    }
-                }
-            } else {
+        let underlay_bg = Color::Rgb(theme.bg.0, theme.bg.1, theme.bg.2);
+        if kitty_minimap {
+            // Once Kitty placeholders are bound, do not paint spaces over them —
+            // that deletes the virtual placement for a frame (scroll tear).
+            // Underlay only until the first PNG bind (or after a clear).
+            if app.editor_minimap_id.is_none() {
                 let style = Style::default().bg(underlay_bg).fg(underlay_bg);
                 for row in 0..inner.height {
                     for dx in 0..minimap_w {
@@ -7282,8 +8061,7 @@ fn paint_tile(
                 (inner.height as u32).saturating_mul(minimap_gfx::PX_PER_LINE_BASE),
                 1,
             );
-            let samples =
-                minimap_glyph_cells(buffer, layout.start_line, layout.shown_lines, theme);
+            let samples = minimap_glyphs_window(buffer, layout.start_line, layout.shown_lines);
             let rows = inner.height as usize;
             for row in 0..rows {
                 let src = if layout.shown_lines <= 1 || rows <= 1 {
@@ -7292,19 +8070,18 @@ fn paint_tile(
                     layout.start_line
                         + (row * layout.shown_lines.saturating_sub(1)) / (rows - 1)
                 };
-                let (raw, (r, g, b)) = samples
+                let glyph = samples
                     .get(src.saturating_sub(layout.start_line))
                     .copied()
-                    .unwrap_or(('·', theme.fg));
-                let glyph = if raw.is_whitespace() { '·' } else { raw };
+                    .unwrap_or('·');
+                let glyph = if glyph.is_whitespace() { '·' } else { glyph };
                 let y = inner.y.saturating_add(row as u16);
                 let in_view = src >= buffer.scroll && src < buffer.scroll + visible.max(1);
-                let fg = if in_view {
-                    Color::Rgb(r, g, b)
+                let style = if in_view {
+                    Style::default().fg(Color::Gray).bg(underlay_bg)
                 } else {
-                    Color::Rgb(r / 2, g / 2, b / 2)
+                    Style::default().fg(Color::DarkGray).bg(underlay_bg)
                 };
-                let style = Style::default().fg(fg).bg(underlay_bg);
                 for dx in 0..minimap_w {
                     let cell_ref = &mut screen[(base_x.saturating_add(dx), y)];
                     cell_ref.set_symbol(&glyph.to_string());
@@ -7315,7 +8092,7 @@ fn paint_tile(
     }
     // Text scrollbar only when Kitty is not owning the right edge.
     if scroll_w > 0 {
-        scrollbar::paint_with(
+        scrollbar::paint(
             &mut screen,
             Rect {
                 x: inner.x.saturating_add(inner.width.saturating_sub(1)),
@@ -7326,9 +8103,8 @@ fn paint_tile(
             scrollbar::ScrollMetrics {
                 offset: buffer.scroll,
                 visible: visible.max(1),
-                total: line_count,
+                total: fold_total,
             },
-            scrollbar::ScrollColors::for_theme(app.minimap_theme.is_light()),
         );
     }
     let frame_area = frame.area();
@@ -7383,7 +8159,13 @@ fn menu_paragraph(cursor: usize) -> Paragraph<'static> {
     )
 }
 
-fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool, light: bool) -> Block<'static> {
+fn header_block(
+    help: bool,
+    hints: bool,
+    hints_on: bool,
+    settings: bool,
+    quit: bool,
+) -> Block<'static> {
     let mark = |hot: bool| {
         if hot {
             Style::default()
@@ -7402,16 +8184,19 @@ fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool, light: bool
     } else if hints_on {
         mark(false)
     } else {
-        Style::default().fg(muted_fg(light))
+        Style::default().fg(Color::DarkGray)
     };
     Block::default()
         .title("Posit")
         .title(
+            // Top-right cluster: ` ? h ; q `
             Line::from(vec![
                 TuiSpan::raw(" "),
                 TuiSpan::styled("?", mark(help)),
                 TuiSpan::raw(" "),
                 TuiSpan::styled("h", hints_style),
+                TuiSpan::raw(" "),
+                TuiSpan::styled(";", mark(settings)),
                 TuiSpan::raw(" "),
                 TuiSpan::styled("q", mark(quit)),
                 TuiSpan::raw(" "),
@@ -7422,8 +8207,8 @@ fn header_block(help: bool, hints: bool, hints_on: bool, quit: bool, light: bool
 }
 
 fn help_hit(column: u16, row: u16, area: Rect, status: Option<Rect>) -> bool {
-    // Title right cluster: ` ? h q ` → `?` at width-7.
-    let title = row == area.y && column == area.x + area.width.saturating_sub(7);
+    // Title right cluster: ` ? h ; q ` → `?` at width-9.
+    let title = row == area.y && column == area.x + area.width.saturating_sub(9);
     let label = status.is_some_and(|status| {
         row == status.y && column >= status.x && column < status.x.saturating_add(8)
     });
@@ -7431,7 +8216,12 @@ fn help_hit(column: u16, row: u16, area: Rect, status: Option<Rect>) -> bool {
 }
 
 fn hints_hit(column: u16, row: u16, area: Rect) -> bool {
-    // Title right cluster: ` ? h q ` → `h` at width-5.
+    // Title right cluster: ` ? h ; q ` → `h` at width-7.
+    row == area.y && column == area.x + area.width.saturating_sub(7)
+}
+
+fn settings_hit(column: u16, row: u16, area: Rect) -> bool {
+    // Title right cluster: ` ? h ; q ` → `;` at width-5.
     row == area.y && column == area.x + area.width.saturating_sub(5)
 }
 
@@ -7710,6 +8500,37 @@ fn line_byte_offset(text: &str, line: usize) -> usize {
     text.len()
 }
 
+/// Highlight selected document lines (0-based), skipping folded gaps.
+fn highlighted_doc_lines(
+    buffer: &EditBuffer,
+    doc_lines: &[usize],
+    show_cursor: bool,
+    editing: bool,
+    content_width: usize,
+    ghost: Option<&Ghost>,
+    md_reveal: markdown_preview::RevealOpts,
+) -> Text<'static> {
+    let mut lines = Vec::with_capacity(doc_lines.len());
+    for &doc_line in doc_lines {
+        let piece = highlighted_window(
+            buffer,
+            show_cursor,
+            editing,
+            content_width,
+            ghost,
+            doc_line,
+            1,
+            md_reveal,
+        );
+        if let Some(line) = piece.lines.into_iter().next() {
+            lines.push(line);
+        } else {
+            lines.push(Line::default());
+        }
+    }
+    Text::from(lines)
+}
+
 fn highlighted_window(
     buffer: &EditBuffer,
     show_cursor: bool,
@@ -7718,9 +8539,8 @@ fn highlighted_window(
     ghost: Option<&Ghost>,
     first_line: usize,
     line_count: usize,
-    theme: minimap_gfx::MinimapTheme,
+    md_reveal: markdown_preview::RevealOpts,
 ) -> Text<'static> {
-    let light = theme.is_light();
     // Populate caches without cloning the full document / span vec into paint.
     buffer.ensure_highlight_cache();
     buffer.ensure_text_cache();
@@ -7729,6 +8549,61 @@ fn highlighted_window(
         .as_ref()
         .map(|(_, text)| text.as_str())
         .unwrap_or("");
+    let is_markdown = buffer.language == "markdown"
+        || buffer.name.ends_with(".md")
+        || buffer.name == "welcome";
+    if is_markdown {
+        let mut lines = markdown_preview::render_buffer(
+            text,
+            first_line,
+            line_count,
+            content_width,
+            md_reveal,
+        )
+        .lines;
+        if show_cursor {
+            let line_index = buffer.document.char_to_line(buffer.cursor);
+            if line_index >= first_line
+                && line_index < first_line.saturating_add(lines.len())
+            {
+                let local = line_index - first_line;
+                // Precise caret when the caret line is source-revealed.
+                let source_revealed = md_reveal.cursor_line.is_some_and(|c| {
+                    markdown_preview::line_in_edit_block(text, c, line_index)
+                }) || md_reveal.hover_line == Some(line_index)
+                    || md_reveal
+                        .selection
+                        .is_some_and(|sel| markdown_preview::line_in_selection(text, sel, line_index));
+                let col_in_line = if source_revealed {
+                    display_col_in_line(text, buffer.cursor, 4)
+                } else {
+                    0
+                };
+                if let Some(ghost) = ghost {
+                    if ghost.revision == buffer.document.revision()
+                        && ghost.cursor == buffer.cursor
+                        && buffer.selection.is_none()
+                        && source_revealed
+                    {
+                        let shown: String = ghost
+                            .text
+                            .chars()
+                            .take(80)
+                            .take_while(|ch| *ch != '\n')
+                            .collect();
+                        if let Some(line) = lines.get_mut(local) {
+                            insert_ghost_at(line, col_in_line, &shown);
+                        }
+                    }
+                }
+                if let Some(line) = lines.get_mut(local) {
+                    paint_display_caret(line, col_in_line, editing);
+                }
+            }
+        }
+        pad_selected_rows(&mut lines, buffer, text, show_cursor, content_width);
+        return Text::from(lines);
+    }
     let hl_guard = buffer.highlight_cache.borrow();
     let raw = hl_guard
         .as_ref()
@@ -7768,7 +8643,7 @@ fn highlighted_window(
     let mut lines = vec![Line::default()];
     let mut line_col = 0usize; // display column within current line (tabs expanded)
     for (start, end, kind) in pieces {
-        let style = token_style(kind, theme);
+        let style = token_style(kind);
         let mut piece_start = start;
         for (index, piece) in text[start..end].split('\n').enumerate() {
             if index > 0 {
@@ -7806,7 +8681,7 @@ fn highlighted_window(
                         .take_while(|ch| *ch != '\n')
                         .collect();
                     if let Some(line) = lines.get_mut(local) {
-                        insert_ghost_at(line, col_in_line, &shown, light);
+                        insert_ghost_at(line, col_in_line, &shown);
                     }
                 }
             }
@@ -7837,7 +8712,7 @@ fn display_col_in_line(text: &str, cursor: usize, tab: usize) -> usize {
     col
 }
 
-fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str, light: bool) {
+fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str) {
     let mut flat = String::new();
     let mut styles: Vec<(usize, usize, Style)> = Vec::new();
     for span in &line.spans {
@@ -7846,7 +8721,7 @@ fn insert_ghost_at(line: &mut Line<'static>, col: usize, ghost: &str, light: boo
         let end = flat.chars().count();
         styles.push((start, end, span.style));
     }
-    let ghost_style = Style::default().fg(muted_fg(light));
+    let ghost_style = Style::default().fg(Color::DarkGray);
     let mut rebuilt = Vec::new();
     let mut inserted = false;
     for (start, end, span_style) in styles {
@@ -8049,15 +8924,6 @@ fn selection_style(base: Style) -> Style {
     base.add_modifier(Modifier::REVERSED)
 }
 
-/// Dim UI ink — ANSI DarkGray/Gray wash out on Ghostty cream.
-fn muted_fg(light: bool) -> Color {
-    if light {
-        Color::Rgb(0x6e, 0x6a, 0x5e)
-    } else {
-        Color::DarkGray
-    }
-}
-
 fn focus_color(editing: bool) -> Color {
     if editing {
         Color::Rgb(230, 120, 20)
@@ -8067,16 +8933,13 @@ fn focus_color(editing: bool) -> Color {
 }
 
 /// Focused = magenta/orange. Hovered unfocused = cyan (click to focus). Seams = yellow.
-/// Idle Gray washes on cream — use muted taupe when the host is light.
-fn panel_border(focused: bool, hovered: bool, seam_hot: bool, editing: bool, light: bool) -> Color {
+fn panel_border(focused: bool, hovered: bool, seam_hot: bool, editing: bool) -> Color {
     if seam_hot {
         Color::Yellow
     } else if focused {
         focus_color(editing)
     } else if hovered {
         Color::Cyan
-    } else if light {
-        muted_fg(true)
     } else {
         Color::Gray
     }
@@ -8089,22 +8952,25 @@ fn cursor_style(editing: bool) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn token_style(kind: TokenKind, theme: minimap_gfx::MinimapTheme) -> Style {
-    // Forced RGB from the active MinimapTheme — same channels the Kitty strip
-    // uses via `theme_rgb_for_token`, so editor and minimap stay 1:1 on light
-    // and dark hosts (light pastels wash on cream; light theme uses darker hues).
-    let rgb = |c: (u8, u8, u8)| Color::Rgb(c.0, c.1, c.2);
+fn token_style(kind: TokenKind) -> Style {
     match kind {
         TokenKind::Plain => Style::default(),
         TokenKind::Keyword => Style::default()
-            .fg(rgb(theme.keyword))
+            .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
         TokenKind::Comment => Style::default()
-            .fg(rgb(theme.comment))
+            .fg(Color::Yellow)
             .add_modifier(Modifier::ITALIC),
-        TokenKind::String => Style::default().fg(rgb(theme.string)),
-        TokenKind::Type => Style::default().fg(rgb(theme.ty)),
-        TokenKind::Function => Style::default().fg(rgb(theme.function)),
+        TokenKind::String => Style::default().fg(Color::Green),
+        TokenKind::Type => Style::default().fg(Color::Cyan),
+        TokenKind::Function => Style::default().fg(Color::Blue),
+        TokenKind::Heading => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        TokenKind::Bold => Style::default().add_modifier(Modifier::BOLD),
+        TokenKind::Italic => Style::default().add_modifier(Modifier::ITALIC),
+        TokenKind::Markup => Style::default().fg(Color::DarkGray),
+        TokenKind::Table => Style::default().fg(Color::White),
     }
 }
 
@@ -8130,6 +8996,8 @@ fn host_pixels() -> Option<(u16, u16)> {
 }
 
 fn release_terminal() {
+    disable_theme_tracking();
+    disable_key_release_reports();
     let _ = disable_raw_mode();
     let _ = execute!(
         stdout(),
@@ -8144,7 +9012,37 @@ fn release_terminal() {
 fn restore_terminal() -> io::Result<()> {
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    enable_theme_tracking()?;
+    enable_key_release_reports()?;
     Ok(())
+}
+
+/// Focus reports + Kitty/Ghostty color-scheme change notifications (CSI ? 2031).
+fn enable_theme_tracking() -> io::Result<()> {
+    // CSI ? 1004 h — focus in/out; CSI ? 2031 h — color scheme reports.
+    write!(stdout(), "\x1b[?1004h\x1b[?2031h")?;
+    stdout().flush()?;
+    Ok(())
+}
+
+fn disable_theme_tracking() {
+    let _ = write!(stdout(), "\x1b[?2031l\x1b[?1004l");
+    let _ = stdout().flush();
+}
+
+/// Kitty progressive enhancement: report press / repeat / release for hold-Tab Flip 3D.
+fn enable_key_release_reports() -> io::Result<()> {
+    execute!(
+        stdout(),
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )
+}
+
+fn disable_key_release_reports() {
+    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
 }
 
 /// Built-in first-party benchmarks (`--bench`, `--bench-memory`).
@@ -8166,12 +9064,13 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
     let _instance = instance::acquire()?;
     // Crossterm drops every color when NO_COLOR is set. This is a full-screen editor.
     crossterm::style::force_color_output(true);
-    // OSC 10/11 before raw mode so the Kitty minimap fill matches the host bg.
-    minimap_gfx::probe_terminal_colors();
     enable_raw_mode()?;
     ignore_interrupt();
     let _guard = TerminalGuard;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    enable_theme_tracking()?;
+    // Best-effort: hosts without CSI u still get Press-only Tab (Enter commits Flip 3D).
+    let _ = enable_key_release_reports();
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     terminal.hide_cursor()?;
     let mut app = if let Some(path) = path {
@@ -8179,10 +9078,23 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|_| "\n".to_string());
         let mut app = EditorApp::new(&text);
         app.bind_initial(path);
+        if app.focused().language == "markdown" {
+            app.open_markdown_preview();
+        }
+        app
+    } else if load_show_welcome(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    ) {
+        let mut app = EditorApp::new("\n");
+        app.open_welcome_buffer();
         app
     } else {
-        EditorApp::new("Welcome to Posit Edit.\n")
+        EditorApp::new("\n")
     };
+    // First OSC sample so the Kitty strip matches the host before paint.
+    app.minimap_theme = term_palette::probe(Duration::from_millis(150)).to_minimap_theme();
+    app.minimap_theme_probed_at = Some(Instant::now());
+    app.minimap_theme_dirty = false;
     // Agent control plane (MCP / posit-edit-mcp). Soft-fail if bind is refused.
     let control = match control::ControlServer::bind() {
         Ok(server) => {
@@ -8190,7 +9102,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             Some(server)
         }
         Err(error) => {
-            app.notice = format!("mcp control offline: {error} — editor still works");
+            app.notice = format!("mcp control offline: {error}");
             None
         }
     };
@@ -8209,7 +9121,11 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         // --- 1) Wait for work, then drain the entire pending input queue. ---
         let wait = if present_needed && frames.due() {
             Duration::ZERO
-        } else if app.animating() || app.terminals.wants_poll() {
+        } else if app.animating()
+            || app.minimap_kitty_suppressed()
+            || app.terminals.wants_poll()
+            || app.preview_engine.busy()
+        {
             frames.wait_hint().max(Duration::from_millis(8))
         } else if let Some(hint_wait) = app.hover_hint_wait() {
             hint_wait
@@ -8271,14 +9187,46 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         if let Some(server) = control.as_ref() {
             server.poll(&mut app);
         }
+        // Async edocview: never wait on pandoc/typst/pymupdf here — only apply
+        // finished pages and schedule the next present.
+        let preview_dirty = app
+            .preview_engine
+            .poll(&mut app.help_doc, &mut app.markdown_doc);
+        if preview_dirty {
+            present_needed = true;
+            app.canvas_chrome_dirty.set(true);
+            if let Some(err) = app.preview_engine.last_error.take() {
+                if app.runtime_dock.as_deref() == Some("markdown") {
+                    app.notice = format!("preview text fallback · {err}");
+                    app.markdown_force_text = true;
+                }
+            }
+        }
+        // Skip capture polling mid-drag / Flip 3D — Canvas yields the GPU path.
         let mut canvas_dirty = false;
-        if !app.canvas_frozen {
+        if !app.canvas_resize && !app.flip.open {
             for surface in &mut app.canvas_surfaces {
                 canvas_dirty |= surface.poll_frame();
             }
         }
+        // Background Flip/minimap syntax rasters — never block the UI thread.
+        if app.flip.open || (minimap_gfx::host_is_kitty() && app.buffers.len() >= 2) {
+            app.schedule_flip_previews();
+        }
+        if app.preview_pool.take_ready() {
+            present_needed = true;
+            if app.flip.open {
+                app.flip.dirty = true;
+            }
+        }
         if !batch.wants_present() && app.chord_due() {
             app.flush_chord();
+            present_needed = true;
+        }
+        // Idle OSC palette refresh — light/dark (and any scheme edit) without keystrokes.
+        let theme_before = app.minimap_theme.fingerprint;
+        refresh_minimap_theme(&mut app);
+        if app.minimap_theme.fingerprint != theme_before {
             present_needed = true;
         }
 
@@ -8288,7 +9236,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             || terminal_busy
             || canvas_dirty
             || size_changed
-            || app.animating())
+            || app.animating()
+            || app.minimap_kitty_suppressed())
             && frames.due()
             || size_changed;
         if should_present {
@@ -8305,14 +9254,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             let _ = terminal.clear();
             match chosen {
                 Ok(paths) => app.open_picked(&paths),
-                Err(ChooseError::Missing) => {
-                    app.notice =
-                        "external file picker missing — install yazi, or use o / ll inside Posit"
-                            .into();
-                }
-                Err(ChooseError::Failed(detail)) => {
-                    app.notice = format!("file picker failed: {detail}");
-                }
+                Err(ChooseError::Missing) => app.notice = "yazi unavailable".to_string(),
+                Err(ChooseError::Failed(detail)) => app.notice = format!("yazi failed: {detail}"),
             }
             present_needed = true;
         }
@@ -8334,7 +9277,8 @@ fn finish_quit_fast() -> ! {
         // Disable mouse, leave alt screen, reset attrs, show cursor, clear the
         // primary screen so the shell prompt is not sitting on leftover UI.
         let _ = out.write_all(
-            b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[0m\x1b[?25h\x1b[2J\x1b[H",
+            // Pop keyboard enhancement (\x1b[>4m), then mouse / alt-screen / cursor restore.
+            b"\x1b[>4m\x1b[?2031l\x1b[?1004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[0m\x1b[?25h\x1b[2J\x1b[H",
         );
     }
     #[cfg(unix)]
@@ -8348,17 +9292,26 @@ fn finish_quit_fast() -> ! {
 /// Apply a coalesced input batch.
 /// Quit/Ctrl-Q runs before every other key so a Down-arrow storm cannot delay exit.
 fn apply_input_batch(app: &mut EditorApp, batch: &scheduler::InputBatch, width: u16, height: u16) {
+    if batch.focus_gained {
+        // Theme may have changed while unfocused (system light/dark, Ghostty scheme).
+        app.minimap_theme_dirty = true;
+        app.minimap_theme_probed_at = None;
+    }
     if batch.toggle_tab {
         app.toggle_tab();
     }
     let mut rest = Vec::with_capacity(batch.keys.len());
-    for &(code, modifiers) in &batch.keys {
+    for &(code, modifiers, kind) in &batch.keys {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         // Only hoist keys that actually request quit in the current mode.
         // Bare `q` while editing must stay in order (it inserts a character).
-        let is_quit = match code {
-            KeyCode::Char('q') | KeyCode::Char('Q') if ctrl => true,
-            KeyCode::Char('q')
+        let is_quit = match (code, kind) {
+            (KeyCode::Char('q') | KeyCode::Char('Q'), KeyEventKind::Press | KeyEventKind::Repeat)
+                if ctrl =>
+            {
+                true
+            }
+            (KeyCode::Char('q'), KeyEventKind::Press | KeyEventKind::Repeat)
                 if !ctrl
                     && !app.editing
                     && !app.palette
@@ -8370,7 +9323,7 @@ fn apply_input_batch(app: &mut EditorApp, batch: &scheduler::InputBatch, width: 
         };
         if is_quit {
             if !app.terminal_key(code, modifiers) {
-                if let Some(command) = map_key(code, modifiers) {
+                if let Some(command) = map_key_event(code, modifiers, kind) {
                     app.handle(command);
                 }
             }
@@ -8378,12 +9331,15 @@ fn apply_input_batch(app: &mut EditorApp, batch: &scheduler::InputBatch, width: 
                 return;
             }
         } else {
-            rest.push((code, modifiers));
+            rest.push((code, modifiers, kind));
         }
     }
-    for &(code, modifiers) in &rest {
-        if !app.terminal_key(code, modifiers) {
-            if let Some(command) = map_key(code, modifiers) {
+    for &(code, modifiers, kind) in &rest {
+        // Key-up must not be forwarded into the focused terminal PTY.
+        if kind == KeyEventKind::Release
+            || !app.terminal_key(code, modifiers)
+        {
+            if let Some(command) = map_key_event(code, modifiers, kind) {
                 app.handle(command);
             }
         }
@@ -8556,6 +9512,13 @@ fn hover_action(app: &EditorApp, column: u16, row: u16) -> Option<&'static str> 
     if quit_hit(column, row, area) {
         return Some("Quit Posit Edit");
     }
+    if settings_hit(column, row, area) {
+        return Some(if matches!(app.overlay, Overlay::Settings) {
+            "Close settings"
+        } else {
+            "Open settings"
+        });
+    }
     if hints_hit(column, row, area) {
         return Some(if app.hover_hints {
             "Turn off mouse hover hints"
@@ -8647,9 +9610,9 @@ fn hover_action(app: &EditorApp, column: u16, row: u16) -> Option<&'static str> 
         }
         if app.terminals.switch_hit(local_x, local_y, chrome.terminal.width) {
             return Some(if app.terminals.show_console {
-                "Show the shell terminal"
+                "Show the terminal"
             } else {
-                "Show build/run console"
+                "Show the console"
             });
         }
         if app.on_terminal_side_seam(column, row) {
@@ -8699,64 +9662,6 @@ fn hover_action(app: &EditorApp, column: u16, row: u16) -> Option<&'static str> 
             }
             return Some("Dismiss notifications");
         }
-    }
-    if let Some(hint) = editor_chrome_hover(app, &chrome, column, row) {
-        return Some(hint);
-    }
-    None
-}
-
-/// Gutter / minimap / scrollbar hover copy for the focused editor tile.
-fn editor_chrome_hover(
-    app: &EditorApp,
-    chrome: &layout::Chrome,
-    column: u16,
-    row: u16,
-) -> Option<&'static str> {
-    if app.pane_focus() != PaneFocus::Editor {
-        return None;
-    }
-    let window = app.layout_window(chrome.content, app.axis());
-    let slice = layout::tile_slice(window, app.focus, app.view)?;
-    let tile = Rect {
-        x: slice.screen_x,
-        y: slice.screen_y,
-        width: slice.width,
-        height: slice.height,
-    };
-    if !contains(tile, column, row) || tile.height <= 2 || tile.width <= 4 {
-        return None;
-    }
-    let local_x = column.saturating_sub(tile.x.saturating_add(1));
-    let local_y = row.saturating_sub(tile.y.saturating_add(1));
-    if local_y + 1 >= tile.height.saturating_sub(1) {
-        return None;
-    }
-    let inner_w = tile.width.saturating_sub(2);
-    let line_count = app.buffers.get(app.focus)?.document.len_lines().max(1);
-    let gutter_w = app.gutter.width_for(line_count);
-    let visible = tile.height.saturating_sub(2) as usize;
-    let (minimap_w, scroll_w) = app.edge_chrome(inner_w, line_count, visible.max(1));
-    if local_x < gutter_w {
-        return Some(match gutter::hit(local_x, gutter_w) {
-            Some(gutter::GutterHit::Breakpoint) => "Click to toggle breakpoint",
-            Some(gutter::GutterHit::Git) => "Git diff stripe · click for detail",
-            Some(gutter::GutterHit::Number) => {
-                if app.gutter.relative_numbers {
-                    "Line numbers · rn for absolute"
-                } else {
-                    "Line numbers · rn for relative"
-                }
-            }
-            None => "Editor gutter",
-        });
-    }
-    let edge_x0 = inner_w.saturating_sub(minimap_w + scroll_w);
-    if minimap_w + scroll_w > 0 && local_x >= edge_x0 {
-        if scroll_w > 0 && local_x + 1 >= inner_w {
-            return Some("Drag the scrollbar to scroll");
-        }
-        return Some("Drag the minimap to scroll");
     }
     None
 }
@@ -9016,27 +9921,6 @@ fn terminal_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
     }
 }
 
-/// Map a dispatched `CommandKey` onto PTY bytes when the terminal owns focus.
-fn command_key_terminal_bytes(key: CommandKey) -> Option<Vec<u8>> {
-    Some(match key {
-        CommandKey::Tab => vec![b'\t'],
-        CommandKey::Enter => vec![b'\r'],
-        CommandKey::Backspace => vec![0x7f],
-        CommandKey::Delete => b"\x1b[3~".to_vec(),
-        CommandKey::Up => b"\x1b[A".to_vec(),
-        CommandKey::Down => b"\x1b[B".to_vec(),
-        CommandKey::Right => b"\x1b[C".to_vec(),
-        CommandKey::Left => b"\x1b[D".to_vec(),
-        CommandKey::Char(ch) => ch.to_string().into_bytes(),
-        CommandKey::CtrlA => vec![1],
-        CommandKey::CtrlS => vec![19],
-        CommandKey::CtrlW => vec![23],
-        CommandKey::CtrlZ => vec![26],
-        CommandKey::CtrlP => vec![16],
-        _ => return None,
-    })
-}
-
 fn present(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut EditorApp,
@@ -9044,37 +9928,272 @@ fn present(
     // Prefer Kitty whenever TERM/TERM_PROGRAM/Ghostty say so — glyph minimap
     // is only the non-Kitty fallback.
     app.graphics.prefer_kitty_from_env();
-    // Refresh before ratatui draw so gutter/scrollbar match the Kitty strip.
-    app.minimap_theme = minimap_gfx::terminal_theme();
-    // Encode the next minimap PNG *before* the synchronized update. Holding the
-    // sync barrier open while zlib-encoding flashed the strip on every scroll
-    // (blank cells → late Kitty bind). terminal-phone/Canvas keep the visible
-    // placeholder grid alive and only swap pixels once the back buffer is ready.
-    let pending = prepare_editor_minimap_frame(app);
+    // Kitty virtual placements are cell-bound. Ratatui may blank those cells in
+    // `draw`; if we EndSynchronizedUpdate *before* rebinding/transmitting, the
+    // host paints one torn frame (blank strip / ghost) then the image snaps back.
+    // Keep draw + Kitty inside the same synchronized update.
+    if app.flip.open {
+        let dt = app
+            .flip_tick_at
+            .map(|at| at.elapsed().as_secs_f32() * 1000.0)
+            .unwrap_or(16.0)
+            .clamp(1.0, 50.0);
+        app.flip_tick_at = Some(Instant::now());
+        let _ = app.flip.tick(dt);
+    }
     execute!(stdout(), BeginSynchronizedUpdate)?;
     let drawn = terminal.draw(|frame| draw(frame, app));
-    let canvas = paint_canvas_graphics(app);
-    let minimap = commit_editor_minimap_frame(app, pending);
+    let kitty = if app.help {
+        // Help owns the screen — skip Canvas/minimap Kitty so they don't fight.
+        clear_editor_minimap(app)
+            .and_then(|_| clear_flip_graphics(app))
+            .and_then(|_| paint_help_graphics(app))
+    } else if app.flip.open {
+        clear_help_graphics(app)
+            .and_then(|_| clear_editor_minimap(app))
+            .and_then(|_| paint_flip_graphics(app))
+    } else if app.minimap_kitty_suppressed() {
+        // Immediate clear while scrolling or sliding buffers — precision scrollbar
+        // is painted by ratatui; do not upload / leave a stale Kitty strip.
+        clear_help_graphics(app)
+            .and_then(|_| clear_flip_graphics(app))
+            .and_then(|_| paint_canvas_graphics(app))
+            .and_then(|_| clear_editor_minimap(app))
+    } else {
+        clear_help_graphics(app)
+            .and_then(|_| clear_flip_graphics(app))
+            .and_then(|_| paint_canvas_graphics(app))
+            .and_then(|_| paint_editor_minimap_graphics(app))
+    };
     execute!(stdout(), EndSynchronizedUpdate)?;
     drawn?;
-    canvas?;
-    minimap?;
+    kitty?;
     Ok(())
 }
 
-/// Pre-encoded Kitty minimap frame ready to upload inside the sync barrier.
-struct PendingMinimapFrame {
-    rect: Rect,
-    rgb: Vec<u8>,
-    px_w: u32,
-    px_h: u32,
-    upload: u32,
-    retire: Option<u32>,
-    key: minimap_gfx::MinimapPaintKey,
+fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
+    app.graphics.prefer_kitty_from_env();
+    if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
+        return Ok(());
+    }
+    // Ensure jobs are queued; raster stays off the UI thread.
+    app.schedule_flip_previews();
+    let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
+    let (tiles, _) = app.content_tiles_and_strip(chrome.content);
+    if tiles.width < 8 || tiles.height < 6 {
+        return Ok(());
+    }
+    let (cell_w, cell_h) = canvas_cell_pixels(app);
+    let img_w = (tiles.width as u32).saturating_mul(cell_w.max(1)).min(960);
+    let img_h = (tiles.height as u32).saturating_mul(cell_h.max(1)).min(640);
+    // Skip heavy scene rebuild while the stack is settled and unchanged.
+    if !app.flip.dirty
+        && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001
+    {
+        return Ok(());
+    }
+    let cards = app.flip_cards();
+    let rgb = flip3d::render_scene_rgb(
+        &cards,
+        app.flip.scroll,
+        app.flip.selected,
+        img_w,
+        img_h,
+    );
+    let Some(png) = canvas::encode_rgb_png(img_w, img_h, &rgb) else {
+        return Ok(());
+    };
+    let placed = canvas::paint_kitty_png_bytes(
+        &mut stdout(),
+        &mut app.graphics,
+        tiles,
+        &png,
+        FLIP3D_KITTY_IMAGE_ID,
+    )?;
+    if placed {
+        app.flip.dirty = false;
+    }
+    Ok(())
+}
+
+fn clear_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
+    if app.graphics.backend() != graphics::GraphicsBackend::Kitty {
+        return Ok(());
+    }
+    write!(
+        stdout(),
+        "\x1b_Ga=d,d=i,i={FLIP3D_KITTY_IMAGE_ID},q=2\x1b\\"
+    )?;
+    Ok(())
+}
+
+fn help_uses_kitty(app: &EditorApp) -> bool {
+    if cfg!(test) || app.help_force_text {
+        return false;
+    }
+    // Only switch off text once pages exist — never blank the screen waiting.
+    app.help_doc
+        .as_ref()
+        .is_some_and(|doc| !doc.pages.is_empty())
+}
+
+fn draw_help_fullscreen(frame: &mut Frame, app: &EditorApp, area: Rect) {
+    let block = Block::default()
+        .title("Help  ·  Esc / ? close  ·  ↑↓ scroll")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    if help_uses_kitty(app) {
+        // edocview: chrome only — retained Kitty crop covers the inner box.
+        frame.render_widget(Paragraph::new(Text::raw("")).block(block), area);
+        return;
+    }
+    let width = area.width.max(8) as usize;
+    let preview = markdown_preview::render(&help_markdown(), width.saturating_sub(2).max(8));
+    let scroll = app.help_scroll.min(u16::MAX as usize) as u16;
+    frame.render_widget(
+        Paragraph::new(preview).scroll((scroll, 0)).block(block),
+        area,
+    );
+}
+
+fn paint_help_graphics(app: &mut EditorApp) -> io::Result<()> {
+    app.graphics.prefer_kitty_from_env();
+    if app.help_force_text || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
+        clear_help_graphics(app)?;
+        return Ok(());
+    }
+    let area = Rect::new(0, 0, app.width.max(1), app.height.max(1));
+    if area.width < 8 || area.height < 4 {
+        return Ok(());
+    }
+    let (cell_w, cell_h) = edocview::cell_pixels(app.width, app.height, app.pixels);
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2).max(1),
+        height: area.height.saturating_sub(2).max(1),
+    };
+    let source = help_markdown();
+    app.preview_engine.request(
+        edocview::PreviewSlot::Help,
+        &source,
+        &app.workspace,
+        inner.width.max(1),
+        cell_w,
+        cell_h,
+        HELP_KITTY_IMAGE_ID,
+        edocview::RASTER_DEBOUNCE,
+    );
+    match edocview::present_markdown(
+        &mut stdout(),
+        &mut app.graphics,
+        &mut app.help_doc,
+        &source,
+        &app.workspace,
+        inner,
+        app.help_scroll,
+        cell_w,
+        cell_h,
+        HELP_KITTY_IMAGE_ID,
+    )? {
+        edocview::PresentStatus::Ready | edocview::PresentStatus::Pending => {}
+        edocview::PresentStatus::Unavailable => {
+            app.help_force_text = true;
+            clear_help_graphics(app)?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_help_graphics(app: &mut EditorApp) -> io::Result<()> {
+    edocview::clear_doc(&mut stdout(), &mut app.help_doc)
+}
+
+fn markdown_uses_kitty(app: &EditorApp) -> bool {
+    if cfg!(test) || app.markdown_force_text {
+        return false;
+    }
+    // Text paints immediately; Kitty takes over only after async pages land.
+    app.runtime_dock.as_deref() == Some("markdown")
+        && app
+            .markdown_doc
+            .as_ref()
+            .is_some_and(|doc| !doc.pages.is_empty())
+}
+
+fn paint_markdown_canvas_graphics(app: &mut EditorApp) -> io::Result<()> {
+    app.graphics.prefer_kitty_from_env();
+    if app.markdown_force_text || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
+        clear_markdown_graphics(app)?;
+        return Ok(());
+    }
+    // Width thrashing mid-drag must not re-queue pandoc/typst rasters.
+    if app.canvas_resize {
+        return Ok(());
+    }
+    let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
+    if chrome.canvas.width < 4 || chrome.canvas.height < 4 {
+        return Ok(());
+    }
+    let inner = canvas_media_rect(chrome.canvas);
+    // Leave one row for the preview footer hint.
+    let inner = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height.saturating_sub(1).max(1),
+    };
+    let (cell_w, cell_h) = edocview::cell_pixels(app.width, app.height, app.pixels);
+    let source = app.markdown_preview_source();
+    // Kick/refresh background raster if fingerprint drifted — never sync-compile.
+    app.preview_engine.request(
+        edocview::PreviewSlot::Markdown,
+        &source,
+        &app.workspace,
+        inner.width.max(1),
+        cell_w,
+        cell_h,
+        MARKDOWN_KITTY_IMAGE_ID,
+        edocview::RASTER_DEBOUNCE,
+    );
+    match edocview::present_markdown(
+        &mut stdout(),
+        &mut app.graphics,
+        &mut app.markdown_doc,
+        &source,
+        &app.workspace,
+        inner,
+        app.markdown_preview_scroll as usize,
+        cell_w,
+        cell_h,
+        MARKDOWN_KITTY_IMAGE_ID,
+    )? {
+        edocview::PresentStatus::Ready => {
+            if app.notice.starts_with("preview · rendering") {
+                app.notice = "preview ready".into();
+            }
+        }
+        edocview::PresentStatus::Pending => {}
+        edocview::PresentStatus::Unavailable => {
+            if let Some(err) = app.preview_engine.last_error.clone() {
+                app.notice = format!("preview text fallback · {err}");
+            }
+            app.markdown_force_text = true;
+            clear_markdown_graphics(app)?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_markdown_graphics(app: &mut EditorApp) -> io::Result<()> {
+    edocview::clear_doc(&mut stdout(), &mut app.markdown_doc)
 }
 
 fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
     if app.help || app.palette || app.overlay != Overlay::None {
+        return None;
+    }
+    if app.minimap_kitty_suppressed() {
         return None;
     }
     let window = app.window();
@@ -9083,9 +10202,8 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
     let (tile_w, tile_h) = window.tile_box(index);
     let line_count = app.focused().document.len_lines().max(1);
     let visible = (tile_h.saturating_sub(2) as usize).max(1);
-    let kitty = minimap_gfx::host_is_kitty();
-    let (cols, scroll_w) = app.edge_chrome(tile_w, line_count, visible);
-    if cols < 2 || tile_h < 4 || !kitty {
+    let (cols, scroll_w) = app.focused_edge_chrome(tile_w, line_count, visible);
+    if cols < 2 || tile_h < 4 || !app.kitty_minimap_enabled() {
         return None;
     }
     // Kitty strip owns the right edge (scroll_w == 0); still leave room if not.
@@ -9098,26 +10216,72 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
     minimap_gfx::screen_rect_from_tile_local(slice, local)
 }
 
-/// Build the next minimap RGB outside the sync barrier (may encode PNG-sized bytes).
-fn prepare_editor_minimap_frame(app: &mut EditorApp) -> Option<PendingMinimapFrame> {
+fn refresh_minimap_theme(app: &mut EditorApp) {
+    let due = app.minimap_theme_dirty
+        || app
+            .minimap_theme_probed_at
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(500));
+    if !due {
+        return;
+    }
+    // OSC replies share stdin with crossterm. Never probe while the user is
+    // typing into the command palette / finder — leftover `rgb:…` chunks were
+    // landing in `app.query` as literal characters.
+    if app.palette || app.finder.is_some() || app.help {
+        return;
+    }
+    // Skip OSC while input is pending — replies share stdin with crossterm.
+    if event::poll(Duration::ZERO).unwrap_or(true) {
+        return;
+    }
+    let Some(palette) = term_palette::probe_osc_quick() else {
+        // Host silent this tick — keep the current theme; retry later.
+        app.minimap_theme_probed_at = Some(Instant::now());
+        app.minimap_theme_dirty = false;
+        return;
+    };
+    let next = palette.to_minimap_theme();
+    app.minimap_theme_probed_at = Some(Instant::now());
+    app.minimap_theme_dirty = false;
+    if next.fingerprint != app.minimap_theme.fingerprint {
+        app.minimap_theme = next;
+        app.editor_minimap_key = None;
+        app.minimap_frame_cache.borrow_mut().clear();
+        app.preview_pool.clear();
+    } else {
+        app.minimap_theme = next;
+    }
+}
+
+fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
     app.graphics.prefer_kitty_from_env();
     if app.graphics.backend() != graphics::GraphicsBackend::Kitty {
-        let _ = clear_editor_minimap(app);
-        return None;
+        // True text-only host — glyph underlay in paint_tile is the fallback.
+        clear_editor_minimap(app)?;
+        return Ok(());
+    }
+    if app.minimap_kitty_suppressed() {
+        clear_editor_minimap(app)?;
+        return Ok(());
     }
     if app.last_pressure.is_critical() && !minimap_gfx::force_minimap() {
-        let _ = clear_editor_minimap(app);
+        clear_editor_minimap(app)?;
         app.minimap_frame_cache.borrow_mut().clear();
-        return None;
+        return Ok(());
     }
     let Some(rect) = editor_minimap_screen_rect(app) else {
-        let _ = clear_editor_minimap(app);
-        return None;
+        clear_editor_minimap(app)?;
+        return Ok(());
     };
     let (cell_w, cell_h) = canvas_cell_pixels(app);
+    let image_id = minimap_gfx::EDITOR_MINIMAP_IMAGE_ID;
+    // Live OSC palette — tracks light/dark and any scheme color edits.
+    refresh_minimap_theme(app);
     let theme = app.minimap_theme;
     let warning = app.last_pressure.is_elevated();
     let scale = minimap_gfx::paint_scale(warning);
+    // Match cell geometry; soft-cap only so we never undersample into stripe soup.
+    // Under Warning, cols are already narrowed by edge_chrome — keep 1:1 px/cell.
     let max_w = if warning { 480 } else { 640 };
     let max_h = if warning { 1200 } else { 1600 };
     let focus = app.focus;
@@ -9134,7 +10298,6 @@ fn prepare_editor_minimap_frame(app: &mut EditorApp) -> Option<PendingMinimapFra
         .max(1)
         .min(max_h);
     let layout = minimap_gfx::layout_proportional(line_count, scroll, visible, px_h, scale);
-    let language = minimap_gfx::language_key(&app.buffers[focus].language);
     let key = minimap_gfx::MinimapPaintKey {
         revision,
         line_count,
@@ -9146,79 +10309,111 @@ fn prepare_editor_minimap_frame(app: &mut EditorApp) -> Option<PendingMinimapFra
         px_w,
         px_h,
         scale,
-        theme: theme.id,
-        language,
+        theme: theme.fingerprint,
     };
-    if app.editor_minimap_key == Some(key) {
-        // Placeholders stay in the ratatui buffer bound to the live id — no
-        // ANSI rewrite, no upload, no flash.
-        return None;
+    let dirty = app.editor_minimap_key != Some(key) || app.editor_minimap_id != Some(image_id);
+    if dirty {
+        let content = minimap_gfx::MinimapContentKey {
+            revision,
+            start_line: layout.start_line,
+            shown_lines: layout.shown_lines,
+            px_w,
+            px_h,
+            scale,
+            theme: theme.fingerprint,
+        };
+        // Field-split: buffers + cache + graphics can borrow together; tinted
+        // RGB stays in cache and feeds PNG encode without an extra Vec copy.
+        let painted = {
+            let mut cache = app.minimap_frame_cache.borrow_mut();
+            let rgb = cache.rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
+                minimap_syntax_cells(&app.buffers[focus], line, cols, theme)
+            });
+            canvas::paint_kitty_rgb(
+                &mut stdout(),
+                &mut app.graphics,
+                rect,
+                rgb,
+                px_w,
+                px_h,
+                image_id,
+            )?
+        };
+        if painted {
+            app.editor_minimap_key = Some(key);
+            app.editor_minimap_id = Some(image_id);
+        }
     }
-    let content = minimap_gfx::MinimapContentKey {
-        revision,
-        start_line: layout.start_line,
-        shown_lines: layout.shown_lines,
-        px_w,
-        px_h,
-        scale,
-        theme: theme.id,
-        language,
-    };
-    let front = app
-        .editor_minimap_id
-        .unwrap_or(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
-    let upload = minimap_gfx::minimap_alternate_id(front);
-    let retire = app.editor_minimap_id;
-    let mut cache = app.minimap_frame_cache.borrow_mut();
-    let rgb = cache
-        .rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
-            minimap_colored_line(&app.buffers[focus], line, cols, theme)
-        })
-        .to_vec();
-    Some(PendingMinimapFrame {
-        rect,
-        rgb,
-        px_w,
-        px_h,
-        upload,
-        retire,
-        key,
-    })
-}
-
-/// Upload a prepared frame inside the sync barrier (placeholders already drawn).
-fn commit_editor_minimap_frame(
-    app: &mut EditorApp,
-    pending: Option<PendingMinimapFrame>,
-) -> io::Result<()> {
-    let Some(pending) = pending else {
-        return Ok(());
-    };
-    let painted = canvas::paint_kitty_rgb_swap(
-        &mut stdout(),
-        &mut app.graphics,
-        pending.rect,
-        &pending.rgb,
-        pending.px_w,
-        pending.px_h,
-        pending.upload,
-        pending.retire,
-    )?;
-    if painted {
-        app.editor_minimap_key = Some(pending.key);
-        app.editor_minimap_id = Some(pending.upload);
-    }
+    // Stable frames: leave placeholders alone. Rewriting them every tick (after
+    // ratatui spaces) was the scroll-tear path; paint_tile no longer blanks once
+    // `editor_minimap_id` is set.
     Ok(())
 }
 
 fn clear_editor_minimap(app: &mut EditorApp) -> io::Result<()> {
     if let Some(id) = app.editor_minimap_id.take() {
         canvas::delete_kitty_image(&mut stdout(), id)?;
-        canvas::delete_kitty_image(&mut stdout(), minimap_gfx::minimap_alternate_id(id))?;
         app.editor_minimap_key = None;
         app.minimap_frame_cache.borrow_mut().clear();
     }
     Ok(())
+}
+
+/// Per-character RGB for the Kitty minimap — same TokenKind → ANSI mapping as the buffer.
+fn minimap_syntax_cells(
+    buffer: &EditBuffer,
+    line: usize,
+    cols: usize,
+    theme: minimap_gfx::MinimapTheme,
+) -> Vec<(char, (u8, u8, u8))> {
+    buffer.ensure_highlight_cache();
+    buffer.ensure_text_cache();
+    let text_guard = buffer.text_cache.borrow();
+    let text = text_guard
+        .as_ref()
+        .map(|(_, text)| text.as_str())
+        .unwrap_or("");
+    let line_count = buffer.document.len_lines().max(1);
+    if line >= line_count || cols == 0 {
+        return Vec::new();
+    }
+    let start = line_byte_offset(text, line);
+    let end = line_byte_offset(text, line.saturating_add(1));
+    if start >= text.len() || start >= end {
+        return Vec::new();
+    }
+    let line_text = text[start..end].trim_end_matches(['\n', '\r']);
+    let hl_guard = buffer.highlight_cache.borrow();
+    let spans = hl_guard
+        .as_ref()
+        .map(|(_, _, spans)| spans.as_slice())
+        .unwrap_or(&[]);
+    let mut out = Vec::with_capacity(cols.min(line_text.chars().count()));
+    let mut byte = start;
+    for ch in line_text.chars().take(cols) {
+        let kind = spans
+            .iter()
+            .find(|span| span.start <= byte && byte < span.end)
+            .map(|span| span.kind)
+            .unwrap_or(TokenKind::Plain);
+        out.push((ch, token_rgb(kind, theme)));
+        byte += ch.len_utf8();
+    }
+    out
+}
+
+fn token_rgb(kind: TokenKind, theme: minimap_gfx::MinimapTheme) -> (u8, u8, u8) {
+    // Mirrors `token_style` named ANSI colors → live OSC palette slots.
+    match kind {
+        TokenKind::Keyword => theme.keyword,
+        TokenKind::Comment => theme.comment,
+        TokenKind::String => theme.string,
+        TokenKind::Type | TokenKind::Heading => theme.ident,
+        TokenKind::Function => theme.function,
+        TokenKind::Markup => theme.markup,
+        TokenKind::Table => theme.fg,
+        TokenKind::Bold | TokenKind::Italic | TokenKind::Plain => theme.fg,
+    }
 }
 
 fn canvas_cell_pixels(app: &EditorApp) -> (u32, u32) {
@@ -9233,9 +10428,38 @@ fn canvas_cell_pixels(app: &EditorApp) -> (u32, u32) {
 }
 
 fn paint_canvas_graphics(app: &mut EditorApp) -> io::Result<()> {
+    // Mid-drag: drop floating Kitty once, then skip geom / PNG / markdown work.
+    // Layout chrome stays on the ratatui path; heavy IO resumes on mouse-up.
+    if app.canvas_resize {
+        if !app.canvas_resize_hid_gfx {
+            if let Some(id) = app.canvas_image_id.take() {
+                canvas::delete_kitty_image(&mut stdout(), id)?;
+            }
+            if let Some(kind) = app.runtime_dock.clone() {
+                if let Some(surface) = app
+                    .canvas_surfaces
+                    .iter_mut()
+                    .find(|surface| surface.kind == kind)
+                {
+                    surface.mark_kitty_evicted();
+                }
+            }
+            clear_markdown_graphics(app)?;
+            app.canvas_resize_hid_gfx = true;
+            app.canvas_painted_size = None;
+        }
+        return Ok(());
+    }
+
     let Some(kind) = app.runtime_dock.clone() else {
+        clear_markdown_graphics(app)?;
         return Ok(());
     };
+    // Markdown Preview: edocview PDF→PNG→Kitty crop (text fallback if toolchain missing).
+    if kind == "markdown" {
+        return paint_markdown_canvas_graphics(app);
+    }
+    clear_markdown_graphics(app)?;
     let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
     if chrome.canvas.width < 4 || chrome.canvas.height < 4 {
         return Ok(());
@@ -9250,61 +10474,87 @@ fn paint_canvas_graphics(app: &mut EditorApp) -> io::Result<()> {
     };
     let (cell_w, cell_h) = canvas_cell_pixels(app);
 
-    // Mid-drag: layout only. Geom + Kitty wait for mouse-up (instant seam feel).
-    if app.canvas_resize {
-        return Ok(());
-    }
-
     // Publish pane geometry once the size settles so capture matches the Canvas.
     app.canvas_surfaces[index].write_geom(inner.width, inner.height, cell_w, cell_h);
 
     let size = (inner.width, inner.height);
-    let size_changed = app.canvas_painted_size != Some(size);
     let surface = &app.canvas_surfaces[index];
     if !surface.has_frame() && !surface.needs_paint() {
         return Ok(());
     }
-    // Frozen: keep the last Kitty frame; only rebind placeholders after Clear.
-    if app.canvas_frozen {
-        if size_changed || app.canvas_placeholders_stale.get() {
-            if let Some(image_id) = app.canvas_image_id {
-                canvas::write_kitty_placeholders(&mut stdout(), inner, image_id)?;
-                stdout().flush()?;
-                app.canvas_painted_size = Some(size);
-                app.canvas_placeholders_stale.set(false);
-            }
+    let image_id = surface.next_image_id();
+    let size_changed = surface.placed_size() != Some(size) || app.canvas_painted_size != Some(size);
+    let content_dirty = surface.needs_paint();
+    let resident = surface.kitty_resident();
+    let cached = surface.cached_png().map(|b| b.to_vec());
+    let path = surface.frame_path().to_path_buf();
+
+    // Fast paths:
+    // 1) Kitty still has the image + same size → placeholders only.
+    // 2) Cached PNG in memory → retransmit without disk wait.
+    // 3) Else fall back to disk path (first frame / cold start).
+    if !content_dirty && resident && !size_changed && !app.canvas_placeholders_stale.get() {
+        return Ok(());
+    }
+    if !content_dirty && resident && (size_changed || app.canvas_placeholders_stale.get()) {
+        // Same pixels, new cell box or chrome Clear — retransmit from cache (or path).
+        let painted = if let Some(png) = cached.as_deref() {
+            canvas::paint_kitty_png_bytes(
+                &mut stdout(),
+                &mut app.graphics,
+                inner,
+                png,
+                image_id,
+            )?
+        } else {
+            canvas::paint_kitty_png(
+                &mut stdout(),
+                &mut app.graphics,
+                inner,
+                &path,
+                image_id,
+            )?
+        };
+        if painted {
+            app.canvas_surfaces[index].mark_painted(size, true);
+            app.canvas_painted_size = Some(size);
+            app.canvas_image_id = Some(image_id);
+            app.canvas_placeholders_stale.set(false);
+            app.canvas_surfaces[index].store_in_cache(&mut app.canvas_frame_cache);
         }
         return Ok(());
     }
-    // Double-buffer: upload to back id, retarget placeholders, retire front.
-    let path = surface.frame_path().to_path_buf();
-    let dirty = surface.needs_paint() || size_changed;
-    let upload = surface.upload_image_id();
-    let display = surface.display_image_id();
-    let had_display = app.canvas_image_id.is_some();
-    if dirty {
-        let retire = if had_display { Some(display) } else { None };
-        let painted = canvas::paint_kitty_png_swap(
-            &mut stdout(),
-            &mut app.graphics,
-            inner,
-            &path,
-            upload,
-            retire,
-        )?;
-        if painted {
-            app.canvas_surfaces[index].mark_painted();
+
+    if content_dirty || size_changed || app.canvas_placeholders_stale.get() || !resident {
+        let painted = if let Some(png) = cached.as_deref() {
+            canvas::paint_kitty_png_bytes(
+                &mut stdout(),
+                &mut app.graphics,
+                inner,
+                png,
+                image_id,
+            )?
+        } else {
+            canvas::paint_kitty_png(
+                &mut stdout(),
+                &mut app.graphics,
+                inner,
+                &path,
+                image_id,
+            )?
+        };
+            if painted {
+            // Ensure cache is warm even when we painted from disk.
+            if app.canvas_surfaces[index].cached_png().is_none() {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    app.canvas_surfaces[index].set_cached_png(bytes);
+                }
+            }
+            app.canvas_surfaces[index].mark_painted(size, true);
             app.canvas_painted_size = Some(size);
-            app.canvas_image_id = Some(app.canvas_surfaces[index].display_image_id());
+            app.canvas_image_id = Some(image_id);
             app.canvas_placeholders_stale.set(false);
-        }
-    } else if size_changed || app.canvas_placeholders_stale.get() {
-        // Re-bind only after Clear/resize — not on every editor scroll.
-        if let Some(image_id) = app.canvas_image_id {
-            canvas::write_kitty_placeholders(&mut stdout(), inner, image_id)?;
-            stdout().flush()?;
-            app.canvas_painted_size = Some(size);
-            app.canvas_placeholders_stale.set(false);
+            app.canvas_surfaces[index].store_in_cache(&mut app.canvas_frame_cache);
         }
     }
     Ok(())
@@ -9349,6 +10599,8 @@ fn is_project_root_marker(dir: &Path) -> bool {
         "package.json",
         "build.zig",
         "flake.nix",
+        "shell.nix",
+        "default.nix",
         "Package.swift",
         "gradlew",
         "gradlew.bat",
@@ -9359,8 +10611,26 @@ fn is_project_root_marker(dir: &Path) -> bool {
         "pom.xml",
         "CMakeLists.txt",
         "meson.build",
+        "Makefile",
+        "GNUmakefile",
+        "makefile",
+        "WORKSPACE",
+        "WORKSPACE.bazel",
+        "MODULE.bazel",
     ];
-    FILES.iter().any(|name| dir.join(name).is_file()) || dir.join(".idea").is_dir()
+    FILES.iter().any(|name| dir.join(name).is_file())
+        || dir.join(".idea").is_dir()
+        || dir
+            .read_dir()
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(".xcodeproj") || name.ends_with(".xcworkspace")
+            })
 }
 
 fn task_line(language: &str, path: Option<&Path>, run: bool) -> Option<(String, Vec<String>)> {
@@ -9425,6 +10695,10 @@ fn task_line(language: &str, path: Option<&Path>, run: bool) -> Option<(String, 
             "swift".to_string(),
             vec![if run { "run" } else { "build" }.to_string()],
         )),
+        "make" | "makefile" => Some((
+            "make".to_string(),
+            vec![if run { "run".to_string() } else { "all".to_string() }],
+        )),
         _ => None,
     }
 }
@@ -9483,6 +10757,7 @@ fn pick_system(systems: &[String], language: &str, chosen: Option<&str>) -> Opti
         "objc" | "objective-c" | "objective-cpp" | "objcpp" => Some("xcodebuild"),
         "java" | "kotlin" => Some("gradle"),
         "javascript" | "typescript" => Some("javascript"),
+        "make" | "makefile" => Some("make"),
         _ => None,
     };
     preferred
@@ -9499,6 +10774,7 @@ fn rank_systems(systems: &[String]) -> Option<String> {
         "gradle",
         "maven",
         "cmake",
+        "make",
         "xcodebuild",
         "swiftpm",
         "zig",
@@ -9530,6 +10806,7 @@ fn detect_systems_fast(root: &Path) -> Vec<String> {
         ),
         ("maven", &["pom.xml"]),
         ("cmake", &["CMakeLists.txt"]),
+        ("make", &["Makefile", "GNUmakefile", "makefile"]),
         ("zig", &["build.zig"]),
         ("swiftpm", &["Package.swift"]),
         ("meson", &["meson.build"]),
@@ -9546,7 +10823,7 @@ fn detect_systems_fast(root: &Path) -> Vec<String> {
     if root.join(".idea").is_dir() {
         found.push("intellij".into());
     }
-    // Xcode: any *.xcodeproj directory
+    // Xcode: any *.xcodeproj / *.xcworkspace directory
     if root
         .read_dir()
         .ok()
@@ -9554,10 +10831,9 @@ fn detect_systems_fast(root: &Path) -> Vec<String> {
         .flatten()
         .flatten()
         .any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".xcodeproj")
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.ends_with(".xcodeproj") || name.ends_with(".xcworkspace")
         })
     {
         found.push("xcodebuild".into());
@@ -9671,40 +10947,80 @@ fn capture(program: &str, args: &[String], cwd: &Path) -> Result<(bool, String),
     Ok((status.success(), text))
 }
 
-fn agent_program() -> String {
-    let mut names = Vec::new();
-    if let Ok(name) = std::env::var("IDE_AGENT") {
-        if !name.is_empty() {
-            names.push(name);
-        }
-    }
-    if names.is_empty() {
-        names.extend([
-            "agent".to_string(),
-            "codex".to_string(),
-            "claude".to_string(),
-        ]);
-    }
-    for name in names {
-        let found = std::process::Command::new("which")
-            .arg(&name)
+fn agent_route() -> ide_ai::RouteReport {
+    ide_ai::resolve_route(|name| {
+        std::process::Command::new("which")
+            .arg(name)
             .output()
-            .is_ok_and(|output| output.status.success());
-        if found {
-            return name;
+            .is_ok_and(|output| output.status.success())
+    })
+}
+
+fn agent_program() -> String {
+    let route = agent_route();
+    route
+        .chosen
+        .program
+        .unwrap_or_else(|| route.chosen.kind.label().to_string())
+}
+
+fn walk_files(root: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.')
+                || name == "target"
+                || name == "node_modules"
+                || name == "build"
+            {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                out.push(path);
+                if out.len() >= limit {
+                    return out;
+                }
+            }
         }
     }
-    String::new()
+    out
 }
 
-fn agent_args(program: &str, prompt: &str) -> Vec<String> {
-    match program {
-        "codex" => vec!["exec".to_string(), prompt.to_string()],
-        _ => vec!["-p".to_string(), prompt.to_string()],
-    }
-}
-
+#[cfg(test)]
 fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Option<CommandKey> {
+    map_key_event(code, modifiers, KeyEventKind::Press)
+}
+
+fn map_key_event(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    kind: KeyEventKind,
+) -> Option<CommandKey> {
+    if kind == KeyEventKind::Release {
+        // Hold-Tab Flip 3D: bare Tab up commits the switcher.
+        return match code {
+            KeyCode::Tab
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                Some(CommandKey::TabRelease)
+            }
+            _ => None,
+        };
+    }
+    map_key_press(code, modifiers)
+}
+
+fn map_key_press(code: KeyCode, modifiers: KeyModifiers) -> Option<CommandKey> {
     let ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let shift = modifiers.contains(KeyModifiers::SHIFT);
     let alt = modifiers.contains(KeyModifiers::ALT);
@@ -9743,7 +11059,12 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Option<CommandKey> {
         KeyCode::Down => Some(CommandKey::Down),
         KeyCode::Esc => Some(CommandKey::Esc),
         KeyCode::F(1) => Some(CommandKey::Help),
-        KeyCode::Tab => Some(CommandKey::Tab),
+        // Flip 3D opens on bare Tab hold in view mode — do not steal Ctrl-Tab.
+        KeyCode::Tab if alt && shift => Some(CommandKey::AltShiftTab),
+        KeyCode::BackTab if alt => Some(CommandKey::AltShiftTab),
+        KeyCode::Tab if alt => Some(CommandKey::AltTab),
+        KeyCode::BackTab => Some(CommandKey::AltShiftTab),
+        KeyCode::Tab if !ctrl => Some(CommandKey::Tab),
         _ => None,
     }
 }
@@ -9814,6 +11135,250 @@ mod tests {
     }
 
     #[test]
+    fn buffer_edge_drag_works_in_full_and_split() {
+        let mut app = EditorApp::new("one\n");
+        app.add_buffer("two.txt", "two\n");
+        app.add_buffer("three.txt", "three\n");
+        app.note_frame(120, 40);
+        app.show_many = false;
+        app.focus_at(1);
+        let (tiles, strip) = app.content_tiles_and_strip(
+            app.frame_chrome(Rect::new(0, 0, app.width, app.height))
+                .content,
+        );
+        assert_eq!(strip.height, 1);
+        // Right edge of focused full buffer → that buffer's span (not a neighbour steal).
+        let seam = app
+            .tile_seam(
+                tiles.x.saturating_add(tiles.width).saturating_sub(1),
+                tiles.y + 2,
+            )
+            .expect("full-mode right edge");
+        assert_eq!(seam, 1);
+        // Left edge is not a buffer resize handle.
+        assert_eq!(app.tile_seam(tiles.x, tiles.y + 2), None);
+        app.arm_buffer_edge_resize(seam);
+        assert!(app.show_many);
+        assert_eq!(app.tile_drag, Some(1));
+        assert!(app.tile_spans.as_ref().is_some_and(|s| s.len() == 3));
+        let mid = strip.x + strip.width / 2;
+        let hit = app.buffer_strip_hit(mid, strip.y).expect("strip");
+        assert!(hit < 3);
+    }
+
+    #[test]
+    fn last_buffer_right_edge_resizes_only_itself() {
+        let mut app = EditorApp::new("one\n");
+        app.add_buffer("two.txt", "two\n");
+        app.add_buffer("three.txt", "three\n");
+        app.show_many = true;
+        app.note_frame(240, 40);
+        app.focus_at(2);
+        // Scroll so the last tile is on-screen.
+        app.view = app.window().origin(2) as f32;
+        app.target = app.view;
+        let before: Vec<u16> = (0..3).map(|i| app.window().along(i)).collect();
+        let slice = layout::tile_slice(app.window(), 2, app.view).expect("last tile visible");
+        let (tile_w, _) = app.window().tile_box(2);
+        assert_eq!(
+            slice.source_x + slice.width,
+            tile_w,
+            "need the trailing edge on-screen"
+        );
+        let seam_x = slice.screen_x + slice.width - 1;
+        let seam_y = slice.screen_y + 2;
+        assert_eq!(app.tile_seam(seam_x, seam_y), Some(2));
+        app.pointer(
+            Pointer::Down {
+                column: seam_x,
+                row: seam_y,
+            },
+            240,
+            40,
+        );
+        app.pointer(
+            Pointer::Drag {
+                column: seam_x + 24,
+                row: seam_y,
+            },
+            240,
+            40,
+        );
+        assert!(app.window().along(2) > before[2]);
+        assert_eq!(app.window().along(0), before[0]);
+        assert_eq!(app.window().along(1), before[1]);
+    }
+
+    #[test]
+    fn flip3d_alt_tab_cycles_and_commits() {
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        app.add_buffer("c.txt", "c\n");
+        app.focus_at(0);
+        app.handle(CommandKey::AltTab);
+        assert!(app.flip.open);
+        assert_eq!(app.flip.selected, 0, "opens on current buffer");
+        app.handle(CommandKey::Right);
+        assert_eq!(app.flip.selected, 1);
+        app.handle(CommandKey::Right);
+        assert_eq!(app.flip.selected, 2);
+        app.handle(CommandKey::Enter);
+        assert!(!app.flip.open);
+        assert_eq!(app.focus, 2);
+        app.handle(CommandKey::AltTab);
+        app.handle(CommandKey::Esc);
+        assert!(!app.flip.open);
+        assert_eq!(app.focus, 2);
+    }
+
+    #[test]
+    fn flip3d_hold_tab_view_mode_and_gs_fallback() {
+        // Ctrl-Tab is intentionally not Flip 3D — hold Tab in view mode is.
+        assert_eq!(map_key(KeyCode::Tab, KeyModifiers::CONTROL), None);
+        assert_eq!(
+            map_key_event(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Release),
+            Some(CommandKey::TabRelease)
+        );
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        app.editing = false;
+        app.focus_at(0);
+        app.handle(CommandKey::Tab);
+        assert!(app.flip.open, "view-mode Tab should open Flip 3D");
+        assert_eq!(app.flip.selected, 0, "hold Tab keeps current buffer");
+        // Tab repeats while held must not cycle.
+        app.handle(CommandKey::Tab);
+        assert_eq!(app.flip.selected, 0);
+        app.handle(CommandKey::TabRelease);
+        assert!(!app.flip.open);
+        assert_eq!(app.focus, 0, "release without arrows stays on current");
+        // Arrows choose the target; release commits.
+        app.handle(CommandKey::Tab);
+        app.handle(CommandKey::Right);
+        assert_eq!(app.flip.selected, 1);
+        app.handle(CommandKey::TabRelease);
+        assert_eq!(app.focus, 1);
+        // Editing mode: Tab must not open the cycler.
+        app.editing = true;
+        app.handle(CommandKey::Tab);
+        assert!(!app.flip.open);
+        app.editing = false;
+        // gs remains a fallback when key-up is unavailable.
+        app.handle(CommandKey::Char('g'));
+        app.handle(CommandKey::Char('s'));
+        assert!(app.flip.open, "gs chord should open Flip 3D");
+        app.handle(CommandKey::Esc);
+        assert!(!app.flip.open);
+        // Single buffer: clear notice path.
+        let mut one = EditorApp::new("only\n");
+        one.editing = false;
+        one.handle(CommandKey::Tab);
+        assert!(!one.flip.open);
+        assert!(one.notice.contains("2+"));
+    }
+
+    #[test]
+    fn flip_preview_pool_is_nonblocking() {
+        let pool = minimap_gfx::PreviewPool::new();
+        let key = minimap_gfx::preview_key(0, 1, 2, 32, 24);
+        pool.request(minimap_gfx::PreviewJob {
+            key,
+            theme: minimap_gfx::MinimapTheme::dark(),
+            width: 32,
+            height: 24,
+            lines: vec![
+                vec![('f', (200, 100, 200)), ('n', (200, 100, 200))],
+                vec![(' ', (30, 30, 30)), ('x', (100, 180, 220))],
+            ],
+        });
+        // Must return immediately — result may arrive on the worker shortly.
+        assert!(pool.get(key).is_none() || pool.get(key).is_some());
+        for _ in 0..50 {
+            if pool.get(key).is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let img = pool.get(key).expect("background preview should finish");
+        assert_eq!(img.width, 32);
+        assert_eq!(img.height, 24);
+        assert_eq!(img.rgb.len(), 32 * 24 * 3);
+    }
+
+    #[test]
+    fn buffer_strip_paints_precision_track() {
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        app.note_frame(80, 24);
+        let screen = rendered(&app);
+        assert!(
+            screen.contains("1/2") || screen.contains("2/2"),
+            "expected buffer strip chip in paint"
+        );
+    }
+
+    #[test]
+    fn seam_pills_paint_on_terminal_top_edge_only() {
+        let mut app = EditorApp::new("file\n");
+        app.note_frame(80, 24);
+        app.terminals.open = true;
+        app.terminal_rows = Some(8);
+        app.maintain_terminal();
+        let rect = app.terminal_rect();
+        assert!(rect.height > 2);
+        // Hover the top border midpoint — only that edge should light the pill.
+        let mid_x = rect.x + rect.width / 2;
+        app.hover = Some((mid_x, rect.y));
+        assert!(app.on_terminal_seam(mid_x, rect.y));
+        assert!(
+            !app.on_terminal_side_seam(mid_x, rect.y),
+            "top-edge hover must not arm the session-list side seam"
+        );
+        let screen = rendered(&app);
+        assert!(
+            screen.contains('━') || screen.contains('╸') || screen.contains('╺'),
+            "expected horizontal split pill glyphs, got excerpt near end: {}",
+            screen.chars().rev().take(200).collect::<String>().chars().rev().collect::<String>()
+        );
+        // Hovering a body cell must not treat the whole panel as a resize seam.
+        let body_x = rect.x + 3;
+        let body_y = rect.y + 2;
+        app.hover = Some((body_x, body_y));
+        assert!(!app.on_terminal_seam(body_x, body_y));
+    }
+
+    #[test]
+    fn gutter_shows_fold_chevrons_and_za_toggles() {
+        let mut app = EditorApp::new("fn main() {\n    let x = 1;\n}\n");
+        app.buffers[0].language = "rust".into();
+        app.buffers[0].cursor = 0;
+        app.buffers[0].anchor = 0;
+        app.note_frame(80, 24);
+        let screen = rendered(&app);
+        assert!(
+            screen.contains('▾') || screen.contains('▸'),
+            "expected fold chevron in gutter, got: {screen}"
+        );
+        // za toggles collapse at caret (line 0).
+        app.handle(CommandKey::Char('z'));
+        app.handle(CommandKey::Char('a'));
+        assert!(
+            app.notice.contains("folded"),
+            "expected fold notice, got: {}",
+            app.notice
+        );
+        assert!(app.focused().folds.borrow().collapsed_count() >= 1);
+        let after = rendered(&app);
+        assert!(after.contains('▸'), "collapsed chevron missing: {after}");
+        // LSP ranges win over syntax when injected.
+        app.apply_lsp_folding_ranges(&serde_json::json!([{"startLine": 0, "endLine": 1}]));
+        assert_eq!(
+            app.focused().folds.borrow().source(),
+            Some(fold::FoldSource::Lsp)
+        );
+    }
+
+    #[test]
     fn fullscreen_is_default_when_opening_another_file() {
         let root = temp_dir("full-default");
         fs::write(root.join("a.txt"), "aaa\n").unwrap();
@@ -9869,7 +11434,9 @@ mod tests {
         batch.scroll_v = 80;
         batch.scroll_column = 40;
         batch.scroll_row = 20;
-        batch.keys.push((KeyCode::Char('q'), KeyModifiers::NONE));
+        batch
+            .keys
+            .push((KeyCode::Char('q'), KeyModifiers::NONE, KeyEventKind::Press));
         apply_input_batch(&mut app, &batch, 120, 40);
         assert!(app.quit(), "q must quit even when a scroll storm shares the batch");
     }
@@ -9881,9 +11448,13 @@ mod tests {
         let before = app.focused().scroll;
         let mut batch = scheduler::InputBatch::default();
         for _ in 0..200 {
-            batch.keys.push((KeyCode::Down, KeyModifiers::NONE));
+            batch
+                .keys
+                .push((KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Press));
         }
-        batch.keys.push((KeyCode::Char('q'), KeyModifiers::NONE));
+        batch
+            .keys
+            .push((KeyCode::Char('q'), KeyModifiers::NONE, KeyEventKind::Press));
         apply_input_batch(&mut app, &batch, 120, 40);
         assert!(app.quit(), "q must outrank Down-arrow backlog");
         // Downs after quit must not run.
@@ -9929,9 +11500,6 @@ mod tests {
     fn keywords_and_strings_use_different_colors() {
         let mut app = EditorApp::new("fn main() {\n    let s = \"fn\";\n}\n");
         app.set_language("rust");
-        let theme = app.minimap_theme;
-        let keyword = Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2);
-        let string = Color::Rgb(theme.string.0, theme.string.1, theme.string.2);
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
@@ -9942,28 +11510,162 @@ mod tests {
                 colors.push(pair[0].fg);
             }
         }
-        assert!(colors.contains(&keyword), "{colors:?}");
-        assert!(colors.contains(&string), "{colors:?}");
+        assert!(colors.contains(&Color::Magenta), "{colors:?}");
+        assert!(colors.contains(&Color::Green), "{colors:?}");
     }
 
     #[test]
     fn bend_and_markdown_use_keyword_color() {
         let mut app = EditorApp::new("# note\nimport Base\ndef shown():\n  match x:\n");
         app.set_language("bend");
-        let keyword = Color::Rgb(
-            app.minimap_theme.keyword.0,
-            app.minimap_theme.keyword.1,
-            app.minimap_theme.keyword.2,
-        );
-        assert!(screen_has_color(&app, keyword));
+        assert!(screen_has_color(&app, Color::Magenta));
         let mut app = EditorApp::new("# Title\nplain\n");
         app.set_language("markdown");
-        let keyword = Color::Rgb(
-            app.minimap_theme.keyword.0,
-            app.minimap_theme.keyword.1,
-            app.minimap_theme.keyword.2,
+        assert!(
+            screen_has_color(&app, Color::Cyan),
+            "markdown headings should paint cyan"
         );
-        assert!(screen_has_color(&app, keyword));
+    }
+
+    #[test]
+    fn welcome_buffer_is_markdown_with_canvas_preview() {
+        let mut app = EditorApp::new("\n");
+        app.note_frame(120, 40);
+        app.open_welcome_buffer();
+        assert_eq!(app.focused().name, "welcome");
+        assert_eq!(app.focused().language, "markdown");
+        assert!(app.focused().text().starts_with("# Welcome"));
+        assert_eq!(app.runtime_dock_id().as_deref(), Some("markdown"));
+        assert!(
+            app.canvas_surfaces
+                .iter()
+                .any(|surface| surface.kind == "markdown")
+        );
+        let screen = rendered_at(&app, 120, 40);
+        assert!(
+            screen.contains("Preview") || screen.contains("Welcome"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn markdown_buffer_conceals_tables_until_hover_reveal() {
+        let src = "# Title\n\n| Key | Action |\n| --- | -----: |\n| `e` | edit |\n";
+        let mut app = EditorApp::new(src);
+        app.set_language("markdown");
+        let buffer = app.focused();
+        let rendered = super::highlighted_window(
+            buffer,
+            false,
+            false,
+            48,
+            None,
+            0,
+            usize::MAX,
+            markdown_preview::RevealOpts::default(),
+        );
+        let flat: String = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(flat.contains("Title"), "{flat}");
+        assert!(!flat.contains("# Title"), "{flat}");
+        assert!(flat.contains('│'), "{flat}");
+        assert!(!flat.contains("| Key |"), "{flat}");
+
+        let revealed = super::highlighted_window(
+            buffer,
+            false,
+            true,
+            48,
+            None,
+            0,
+            usize::MAX,
+            markdown_preview::RevealOpts {
+                hover_line: Some(2),
+                cursor_line: None,
+                selection: None,
+            },
+        );
+        let row: String = revealed.lines[2]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(row.contains('|'), "hover reveal raw: {row}");
+        assert!(row.contains("Key") || row.contains('⌜'), "{row}");
+
+        let editing = super::highlighted_window(
+            buffer,
+            true,
+            true,
+            48,
+            None,
+            0,
+            usize::MAX,
+            markdown_preview::RevealOpts {
+                hover_line: None,
+                cursor_line: Some(4),
+                selection: None,
+            },
+        );
+        let header: String = editing.lines[2]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            header.contains("| Key |"),
+            "caret on table unconceals block: {header}"
+        );
+        assert!(!header.contains('⌜'), "{header}");
+
+        // View-mode select-all: every line shows raw source.
+        let mut app = EditorApp::new(src);
+        app.set_language("markdown");
+        app.select_all();
+        let sel = app.selection().expect("selection");
+        let buffer = app.focused();
+        let selected = super::highlighted_window(
+            buffer,
+            false,
+            false,
+            48,
+            None,
+            0,
+            usize::MAX,
+            markdown_preview::RevealOpts {
+                hover_line: None,
+                cursor_line: None,
+                selection: Some(sel),
+            },
+        );
+        let flat: String = selected
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(flat.contains("# Title"), "{flat}");
+        assert!(flat.contains("| Key |"), "{flat}");
+        assert!(!flat.contains('│'), "select-all drops table render: {flat}");
+    }
+
+    #[test]
+    fn settings_can_disable_welcome_on_startup() {
+        let root = temp_dir("welcome-setting");
+        let mut app = EditorApp::new("\n");
+        app.set_workspace(root.clone());
+        assert!(app.show_welcome);
+        app.toggle_show_welcome();
+        assert!(!app.show_welcome);
+        let saved = fs::read_to_string(root.join(".posit/settings.json")).unwrap();
+        assert!(
+            saved.contains("\"show_welcome\":false") || saved.contains("\"show_welcome\": false"),
+            "{saved}"
+        );
+        assert!(!load_show_welcome(&root));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -9981,20 +11683,39 @@ mod tests {
         let mut saw_columns = false;
         let mut saw_close = false;
         let mut saw_rename = false;
-        for _ in 0..400 {
+        let mut saw_keybinds = false;
+        for _ in 0..500 {
             let screen = rendered(&app);
             saw_title |= screen.contains("title bar");
             saw_columns |= screen.contains("80 columns");
             saw_close |= screen.contains("close the buffer");
             saw_rename |= screen.contains("rename");
+            saw_keybinds |= screen.contains("Keybinds")
+                || screen.contains("Editing mode")
+                || screen.contains("Canvas");
             app.handle(CommandKey::Down);
         }
-        assert!(saw_title);
-        assert!(saw_columns);
-        assert!(saw_close);
-        assert!(saw_rename);
+        assert!(saw_title, "expected title-bar prose in fullscreen help");
+        assert!(saw_columns, "expected 80 columns prose in fullscreen help");
+        assert!(saw_close, "expected close-buffer bind");
+        assert!(saw_rename, "expected rename bind");
+        assert!(saw_keybinds, "expected categorized keybind sections");
         assert!(help_text().contains("format the file"));
-        assert!(help_text().contains("open the floating file browser"));
+        assert!(help_text().contains("open floating Yazi"));
+        assert!(help_text().contains("| Key | Action |"));
+        assert!(help_markdown().contains("## Editing mode"));
+        if help_icon_path().is_some() {
+            assert!(
+                help_markdown().contains("![Posit Edit]("),
+                "Help should embed the shipped Posit Edit icon when assets are present"
+            );
+        }
+        // Full-screen: help content spans the terminal width (not a side pane).
+        let screen = rendered_at(&app, 80, 24);
+        assert!(
+            screen.contains("Help") || screen.contains("Esc"),
+            "{screen}"
+        );
         app.pointer(Pointer::Down { column: 1, row: 23 }, 80, 24);
         assert!(!app.help_open());
         app.handle(CommandKey::Help);
@@ -10004,36 +11725,11 @@ mod tests {
     }
 
     #[test]
-    fn freeze_holds_canvas_frames_until_thaw() {
-        let mut app = EditorApp::new("hello");
-        app.note_frame(160, 40);
-        app.control_command("freeze").unwrap();
-        assert!(
-            app.notice().contains("open Browser") && app.notice().contains('6'),
-            "{}",
-            app.notice()
-        );
-        assert!(!app.canvas_frozen);
-        app.workbench(WorkbenchAction::Browser);
-        assert!(app.canvas_open());
-        app.control_command("freeze").unwrap();
-        assert!(app.canvas_frozen);
-        assert!(app.notice().contains("frozen"));
-        app.control_command("thaw").unwrap();
-        assert!(!app.canvas_frozen);
-        assert_eq!(app.notice(), "Canvas live");
-        app.palette = true;
-        app.query = "freeze".into();
-        app.handle(CommandKey::Enter);
-        assert!(app.canvas_frozen);
-    }
-
-    #[test]
     fn hints_button_and_key_toggle_hover_tooltips() {
         let mut app = EditorApp::new("hello");
         assert!(app.hover_hints);
-        // Title cluster is ` ? h q ` — `h` sits at width-5.
-        app.pointer(Pointer::Down { column: 75, row: 0 }, 80, 24);
+        // Title cluster is ` ? h ; q ` — `h` sits at width-7.
+        app.pointer(Pointer::Down { column: 73, row: 0 }, 80, 24);
         assert!(!app.hover_hints);
         assert_eq!(app.notice(), "hover hints off");
         app.handle(CommandKey::Char('h'));
@@ -10052,6 +11748,40 @@ mod tests {
         app.hover_since = Some(Instant::now() - Duration::from_secs(2));
         app.refresh_hover_hint();
         assert_eq!(app.hover_hint.as_deref(), Some("Quit Posit Edit"));
+    }
+
+    #[test]
+    fn settings_button_opens_overlay_and_kitty_toggle_persists() {
+        let root = temp_dir("settings-kitty");
+        let mut app = EditorApp::new("hello");
+        app.set_workspace(root.clone());
+        assert!(app.kitty_graphics);
+        // Title cluster ` ? h ; q ` — `;` at width-5.
+        app.pointer(Pointer::Down { column: 75, row: 0 }, 80, 24);
+        assert!(matches!(app.overlay, Overlay::Settings));
+        let screen = rendered_at(&app, 80, 24);
+        assert!(
+            screen.contains("kitty") && screen.contains("on"),
+            "settings should list kitty toggle: {screen}"
+        );
+        app.handle(CommandKey::Char('k'));
+        assert!(!app.kitty_graphics);
+        assert!(!graphics::kitty_allowed());
+        let saved = fs::read_to_string(root.join(".posit/settings.json")).unwrap();
+        assert!(
+            saved.contains("\"kitty_graphics\":false")
+                || saved.contains("\"kitty_graphics\": false"),
+            "{saved}"
+        );
+        app.handle(CommandKey::Char('k'));
+        assert!(app.kitty_graphics);
+        assert!(graphics::kitty_allowed());
+        // Header button closes when already open.
+        app.pointer(Pointer::Down { column: 75, row: 0 }, 80, 24);
+        assert!(matches!(app.overlay, Overlay::None));
+        let _ = fs::remove_dir_all(root);
+        // Restore global flag for other tests.
+        graphics::set_kitty_allowed(true);
     }
 
     #[test]
@@ -10087,6 +11817,48 @@ mod tests {
         let mut app = EditorApp::new("a\nb\nc\nd\ne\nf\n");
         app.pointer(Pointer::ScrollDown { column: 40, row: 4 }, 80, 8);
         assert_eq!(app.scroll(), 1);
+    }
+
+    #[test]
+    fn kitty_minimap_clears_during_scroll_and_buffer_slide() {
+        let mut app = EditorApp::new(&"line\n".repeat(120));
+        app.add_buffer("b.txt", &"other\n".repeat(120));
+        app.note_frame(120, 40);
+        assert!(!app.minimap_kitty_suppressed());
+        let (mini, sb) = app.focused_edge_chrome(120, 120, 30);
+        // Settled: Kitty strip (when host is Kitty) or glyph+sb; never sb-only with mini>0.
+        let _ = (mini, sb);
+
+        app.pointer(Pointer::ScrollDown { column: 40, row: 8 }, 120, 40);
+        assert!(app.minimap_kitty_suppressed(), "wheel must pause Kitty minimap");
+        assert_eq!(
+            app.focused_edge_chrome(120, 120, 30),
+            (0, 1),
+            "precision scrollbar while scrolling"
+        );
+
+        app.wheel_at = None;
+        assert!(!app.minimap_kitty_suppressed());
+
+        app.focus_at(1);
+        assert!(
+            app.view_transitioning() || app.minimap_kitty_suppressed(),
+            "buffer focus slide must pause Kitty minimap"
+        );
+        assert_eq!(
+            app.focused_edge_chrome(120, 120, 30),
+            (0, 1),
+            "precision scrollbar during buffer transition"
+        );
+        // Settle the slide.
+        for _ in 0..40 {
+            app.tick(Duration::from_millis(50));
+            if !app.view_transitioning() {
+                break;
+            }
+        }
+        assert!(!app.view_transitioning());
+        assert!(!app.minimap_kitty_suppressed());
     }
 
     #[test]
@@ -10306,7 +12078,7 @@ mod tests {
         assert!(!app.agent_focused);
         app.set_hover(chrome.terminal.x + 2, chrome.terminal.y + 2);
         assert_eq!(
-            panel_border(false, true, false, false, false),
+            panel_border(false, true, false, false),
             Color::Cyan,
             "unfocused hover must read as click-to-focus"
         );
@@ -10319,18 +12091,9 @@ mod tests {
         assert_eq!(app.terminal_rect().height, 6);
         app.handle(CommandKey::Char('t'));
         assert_eq!(app.terminal_rect().height, 1);
-        assert!(
-            app.notice().contains("terminal off"),
-            "{}",
-            app.notice()
-        );
+        assert_eq!(app.notice(), "terminal off");
         app.handle(CommandKey::Char('t'));
         assert_eq!(app.terminal_rect().height, 6);
-        assert!(
-            app.notice().contains("terminal on"),
-            "{}",
-            app.notice()
-        );
         let rect = app.terminal_rect();
         let screen = rendered_at(&app, 80, 24);
         assert!(screen.contains("Terminal") || screen.contains("terminal"));
@@ -10718,8 +12481,8 @@ mod tests {
             40,
         );
         assert!(app.window().along(0) > before);
-        assert!(app.window().along(1) < before);
-        assert_eq!(app.window().along(0) + app.window().along(1), before * 2);
+        // Neighbour keeps its preferred width (niri-style independent spans).
+        assert_eq!(app.window().along(1), before);
         let (x, y) = app.text_origin().unwrap();
         let gutter_w = app
             .gutter
@@ -10736,6 +12499,7 @@ mod tests {
         assert_eq!(app.axis(), Axis::Vertical);
         let top = app.window().along(0);
         assert_eq!(top, app.window().along(1));
+        let neighbour = app.window().along(1);
         let slice = layout::tile_slice(app.window(), 0, app.view).unwrap();
         let seam_x = slice.screen_x + 2;
         let seam_y = slice.screen_y + slice.height - 1;
@@ -10756,7 +12520,7 @@ mod tests {
             110,
         );
         assert!(app.window().along(0) > top);
-        assert_eq!(app.window().along(0) + app.window().along(1), top * 2);
+        assert_eq!(app.window().along(1), neighbour);
 
         app.note_frame(188, 40);
         app.handle(CommandKey::CtrlW);
@@ -11110,7 +12874,7 @@ mod tests {
         app.note_frame(120, 36);
         app.handle(CommandKey::Char('o'));
         let screen = rendered_at(&app, 120, 36);
-        assert!(screen.contains("Open") || screen.contains("Enter open"));
+        assert!(screen.contains("Yazi"));
         assert!(screen.contains("Posit"));
         assert!(screen.contains("pick-me.txt"));
         let float = yazi_rect(Rect::new(0, 0, 120, 36));
@@ -11160,10 +12924,11 @@ mod tests {
             keys.iter().position(|key| *key == "ll") < keys.iter().position(|key| *key == "lll")
         );
         let guide = help_text();
-        assert!(guide.contains("key"));
-        assert!(guide.contains("action"));
+        assert!(guide.contains("Key") && guide.contains("Action"));
+        assert!(guide.contains("| Key | Action |"));
+        assert!(guide.contains("## Editing mode"));
         assert!(guide.contains("format the file"));
-        assert!(guide.contains("open the floating file browser"));
+        assert!(guide.contains("open floating Yazi"));
 
         let mut app = EditorApp::new("plain");
         app.note_frame(220, 40);
@@ -11317,17 +13082,10 @@ mod tests {
         app.note_frame(80, 24);
         app.handle(CommandKey::Char('a'));
         let (keyword, comment) = selection_colors(&app, 80, 24);
-        let theme = app.minimap_theme;
-        assert_eq!(
-            keyword.0,
-            Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2)
-        );
+        assert_eq!(keyword.0, Color::Magenta);
         assert!(keyword.1, "keyword selection is reversed");
         assert!(comment.1, "comment selection is reversed");
-        assert_eq!(
-            comment.0,
-            Color::Rgb(theme.comment.0, theme.comment.1, theme.comment.2)
-        );
+        assert_eq!(comment.0, Color::Yellow);
     }
 
     #[test]
@@ -11387,6 +13145,55 @@ mod tests {
         app.handle(CommandKey::Char('1'));
         assert!(app.text().contains('1'));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn console_right_click_select_all_and_drag_copy_logs() {
+        let previous = clipboard::get().ok();
+        let mut app = EditorApp::new("buffer text");
+        app.note_frame(120, 40);
+        app.terminals
+            .append_console("*workbench*", "cargo test\nwarning: unused");
+        assert!(app.terminals.show_console);
+        let rect = app.terminal_rect();
+        assert!(rect.height > 2, "console panel visible");
+        // Right-click Select All on the console body.
+        let cx = rect.x + 2;
+        let cy = rect.y + 2;
+        app.pointer(Pointer::Right { column: cx, row: cy }, 120, 40);
+        match &app.overlay {
+            Overlay::Menu(menu) => assert!(menu.over_terminal),
+            other => panic!("expected menu over console, got {other:?}"),
+        }
+        app.handle(CommandKey::Char('a'));
+        assert!(app.terminals.has_selection());
+        let selected = app.terminals.selected_text().expect("console selection");
+        assert!(selected.contains("cargo test"), "{selected}");
+        assert!(selected.contains("warning"), "{selected}");
+        app.handle(CommandKey::Char('y'));
+        assert_eq!(app.notice(), "copied");
+        // Fresh drag selection still works after a menu yank.
+        app.terminals.clear_selection();
+        app.pointer(
+            Pointer::Down {
+                column: cx,
+                row: cy,
+            },
+            120,
+            40,
+        );
+        app.pointer(
+            Pointer::Drag {
+                column: cx + 8,
+                row: cy,
+            },
+            120,
+            40,
+        );
+        assert!(app.terminals.has_selection());
+        if let Some(text) = previous {
+            let _ = clipboard::set(&text);
+        }
     }
 
     #[test]
@@ -11620,6 +13427,7 @@ mod tests {
         app.ghost = Some(Ghost {
             revision: 0,
             cursor: 0,
+            replace_from: None,
             text: "NOPE".into(),
         });
         let text = app.text();
@@ -11627,65 +13435,6 @@ mod tests {
         assert!(app.text().ends_with('\t') || app.text().contains('\t'));
         assert!(!app.text().contains("NOPE"));
         assert!(text.len() < app.text().len());
-    }
-
-    #[test]
-    fn tab_completion_never_steals_the_terminal_pane() {
-        let mut app = EditorApp::new("let width = 1;\nlet w = wid");
-        app.tab_enabled = true;
-        app.note_frame(80, 24);
-        app.maintain_terminal();
-        editing(&mut app);
-        let len = app.text().chars().count();
-        for _ in 0..len {
-            app.handle(CommandKey::Right);
-        }
-        app.refresh_ghost();
-        assert!(app.ghost.as_ref().is_some_and(|ghost| ghost.text == "th"));
-
-        app.focus_pane(PaneFocus::Terminal);
-        assert_eq!(app.pane_focus(), PaneFocus::Terminal);
-        assert!(app.terminals.focused());
-        assert!(!app.editing);
-        assert!(app.ghost.is_none(), "leaving the editor must drop ghost text");
-
-        app.refresh_ghost();
-        assert!(
-            app.ghost.is_none(),
-            "ghost must stay off while the terminal owns the keyboard"
-        );
-
-        let before = app.text();
-        app.handle(CommandKey::Tab);
-        assert_eq!(
-            app.text(),
-            before,
-            "handle(Tab) must not indent/complete the buffer when terminal-focused"
-        );
-        app.control_key("tab").expect("tab");
-        assert_eq!(
-            app.text(),
-            before,
-            "control_key(tab) must not mutate the buffer when terminal-focused"
-        );
-        assert!(
-            app.terminal_key(KeyCode::Tab, KeyModifiers::NONE),
-            "shell Tab must still reach the PTY"
-        );
-
-        app.focus_pane(PaneFocus::Editor);
-        editing(&mut app);
-        let len = app.text().chars().count();
-        for _ in 0..len {
-            app.handle(CommandKey::Right);
-        }
-        app.refresh_ghost();
-        assert!(
-            app.ghost.as_ref().is_some_and(|ghost| ghost.text == "th"),
-            "editor edit mode still gets lexical Tab completion"
-        );
-        app.handle(CommandKey::Tab);
-        assert_eq!(app.text(), "let width = 1;\nlet w = width");
     }
 
     #[test]
@@ -11710,7 +13459,7 @@ mod tests {
             app.ghost.as_ref(),
             0,
             usize::MAX,
-            app.minimap_theme,
+            markdown_preview::RevealOpts::default(),
         );
         let line = &rendered.lines[1];
         let flat: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -11822,7 +13571,55 @@ mod tests {
             48,
         );
         assert!(!app.canvas_resize, "release ends resize without freezing paint path");
+        assert!(!app.canvas_resize_hid_gfx);
         assert!(app.canvas_painted_size.is_none(), "release schedules Kitty repaint");
+        assert!(
+            app.canvas_chrome_dirty.get(),
+            "release schedules one chrome refresh"
+        );
+    }
+
+    #[test]
+    fn canvas_resize_drag_does_not_dirty_chrome_each_move() {
+        let mut app = EditorApp::new("canvas resize cheap\n");
+        app.runtime_dock = Some("browser".into());
+        app.canvas_surfaces
+            .push(canvas::CanvasSurface::test_stub("browser", "https://example.com"));
+        app.note_frame(180, 48);
+        let chrome = app.frame_chrome(Rect::new(0, 0, 180, 48));
+        let seam_x = chrome.canvas.x;
+        let seam_y = chrome.canvas.y + 4;
+        app.pointer(
+            Pointer::Down {
+                column: seam_x,
+                row: seam_y,
+            },
+            180,
+            48,
+        );
+        app.canvas_chrome_dirty.set(false);
+        app.pointer(
+            Pointer::Drag {
+                column: seam_x.saturating_sub(12),
+                row: seam_y,
+            },
+            180,
+            48,
+        );
+        assert!(app.canvas_resize);
+        assert!(
+            !app.canvas_chrome_dirty.get(),
+            "drag must not Clear/rebuild canvas chrome every tick"
+        );
+        app.pointer(
+            Pointer::Drag {
+                column: seam_x.saturating_sub(30),
+                row: seam_y,
+            },
+            180,
+            48,
+        );
+        assert!(!app.canvas_chrome_dirty.get());
     }
 
     #[test]
@@ -11945,451 +13742,6 @@ mod tests {
     }
 
     #[test]
-    fn finder_empty_hint_names_the_mode() {
-        assert!(finder_empty_hint(FinderKind::Files, true).contains("path"));
-        assert!(finder_empty_hint(FinderKind::Grep, false).contains("no matches"));
-        assert!(finder_empty_hint(FinderKind::Grep, true).contains("Tab"));
-        assert!(finder_empty_hint(FinderKind::Buffers, true).contains("buffers"));
-        let mut app = EditorApp::new("hi\n");
-        app.set_workspace(std::env::temp_dir());
-        app.open_finder(FinderKind::Grep);
-        if let Some(finder) = app.finder.as_mut() {
-            finder.query = "zzznomatchzzz".into();
-        }
-        app.refresh_finder();
-        let screen = rendered_at(&app, 80, 24);
-        assert!(
-            screen.contains("no matches") || screen.contains("Esc"),
-            "{screen}"
-        );
-        assert!(
-            screen.contains("Enter open") || screen.contains("Tab mode"),
-            "{screen}"
-        );
-    }
-
-    #[test]
-    fn narrow_layout_explains_missing_minimap() {
-        let mut app = EditorApp::new("short\n");
-        app.note_frame(12, 24);
-        assert!(
-            app.notice.contains("narrow") || app.notice.contains("minimap"),
-            "{}",
-            app.notice
-        );
-    }
-
-
-
-
-
-    #[test]
-    fn file_browser_is_titled_open_not_yazi() {
-        let root = temp_dir("open-title");
-        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
-        let mut app = EditorApp::new("x");
-        app.set_workspace(root.clone());
-        app.note_frame(100, 30);
-        app.handle(CommandKey::Char('o'));
-        let screen = rendered_at(&app, 100, 30);
-        assert!(screen.contains("Open"), "{screen}");
-        assert!(!screen.contains("Yazi"), "{screen}");
-        assert!(
-            screen.contains("ll find") || screen.contains("h up"),
-            "{screen}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn open_browser_at_filesystem_root_explains_itself() {
-        let mut app = EditorApp::new("x");
-        app.note_frame(80, 24);
-        app.yazi = Some(YaziBrowse {
-            cwd: PathBuf::from("/"),
-            items: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-        });
-        app.handle_yazi(CommandKey::Char('h'));
-        assert!(
-            app.notice.contains("already at the top") && app.notice.contains("ll"),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn empty_notifications_explain_themselves() {
-        let mut app = EditorApp::new("hi\n");
-        app.handle(CommandKey::Char('i'));
-        assert!(
-            app.notice.contains("no notifications") && app.notice.contains('i'),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn settings_lists_relative_and_canvas() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(80, 24);
-        app.overlay = Overlay::Settings;
-        let screen = rendered_at(&app, 80, 24);
-        assert!(screen.contains("relative"), "{screen}");
-        assert!(screen.contains("canvas") || screen.contains("freeze"), "{screen}");
-        assert!(
-            screen.contains("Minimap") || screen.contains("minimap"),
-            "{screen}"
-        );
-    }
-
-    #[test]
-    fn idle_panel_borders_stay_visible_on_light_hosts() {
-        assert_eq!(
-            panel_border(false, false, false, false, false),
-            Color::Gray
-        );
-        assert_eq!(
-            panel_border(false, false, false, false, true),
-            muted_fg(true)
-        );
-        assert_ne!(
-            panel_border(false, false, false, false, true),
-            Color::Gray,
-            "ANSI Gray washes on cream"
-        );
-    }
-
-    #[test]
-    fn ghost_and_muted_ink_follow_light_hosts() {
-        assert_eq!(muted_fg(true), Color::Rgb(0x6e, 0x6a, 0x5e));
-        assert_eq!(muted_fg(false), Color::DarkGray);
-        let mut line = Line::from("abc");
-        insert_ghost_at(&mut line, 1, "XX", true);
-        let ghost = line
-            .spans
-            .iter()
-            .find(|s| s.content.contains("XX"))
-            .expect("ghost");
-        assert_eq!(ghost.style.fg, Some(Color::Rgb(0x6e, 0x6a, 0x5e)));
-    }
-
-    #[test]
-    fn spatial_rows_stay_readable_on_light_hosts() {
-        let mut app = EditorApp::new("hi\n");
-        app.minimap_theme = minimap_gfx::MinimapTheme::light();
-        app.spatial_lines = vec!["alpha".into(), "beta".into()];
-        app.spatial_cursor = 0;
-        app.spatial.active_mode = SpatialMode::Overview;
-        app.note_frame(80, 24);
-        let screen = rendered_at(&app, 80, 24);
-        assert!(screen.contains("alpha") || screen.contains("Overview"), "{screen}");
-        // Non-selected ink must not be ANSI White on cream.
-        let light_fg = Color::Rgb(0x1a, 0x1a, 0x1a);
-        assert_ne!(light_fg, Color::White);
-    }
-
-    #[test]
-    fn minimap_uses_editor_syntax_token_colors() {
-        let mut app = EditorApp::new("fn main() {\n    let x = \"hi\";\n    // note\n}\n");
-        app.set_language("rust");
-        app.note_frame(100, 30);
-        let theme = minimap_gfx::MinimapTheme::dark();
-        let cells = minimap_colored_line(&app.buffers[0], 0, 32, theme);
-        assert!(
-            cells.iter().any(|(ch, rgb)| *ch == 'f' && *rgb == theme.keyword),
-            "fn keyword should use editor keyword RGB, got {cells:?}"
-        );
-        let string_line = minimap_colored_line(&app.buffers[0], 1, 40, theme);
-        assert!(
-            string_line
-                .iter()
-                .any(|(ch, rgb)| *ch == '"' && *rgb == theme.string),
-            "string quotes should use editor string RGB, got {string_line:?}"
-        );
-        let comment_line = minimap_colored_line(&app.buffers[0], 2, 40, theme);
-        assert!(
-            comment_line
-                .iter()
-                .any(|(ch, rgb)| *ch == '/' && *rgb == theme.comment),
-            "comment should use editor comment RGB, got {comment_line:?}"
-        );
-        // Editor token_style forced-RGB must match the theme the strip uses.
-        assert_eq!(
-            token_style(TokenKind::Keyword, theme).fg,
-            Some(Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2))
-        );
-        assert_eq!(
-            token_style(TokenKind::String, theme).fg,
-            Some(Color::Rgb(theme.string.0, theme.string.1, theme.string.2))
-        );
-        // Light hosts get a darker palette — One Dark pastels fail cream contrast.
-        let light = minimap_gfx::MinimapTheme::light();
-        assert_ne!(light.comment, theme.comment);
-        assert_eq!(
-            token_style(TokenKind::Comment, light).fg,
-            Some(Color::Rgb(light.comment.0, light.comment.1, light.comment.2))
-        );
-        let cells_light = minimap_colored_line(&app.buffers[0], 2, 40, light);
-        assert!(
-            cells_light
-                .iter()
-                .any(|(ch, rgb)| *ch == '/' && *rgb == light.comment),
-            "light minimap comment must match light editor comment, got {cells_light:?}"
-        );
-    }
-
-    #[test]
-    fn palette_minimap_toggles_edge_chrome() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(100, 30);
-        assert!(app.minimap_on);
-        let (on_mm, _) = app.edge_chrome(80, 40, 20);
-        assert!(on_mm > 0, "minimap should reserve columns when on");
-        app.palette = true;
-        app.query = "minimap".into();
-        app.handle(CommandKey::Enter);
-        assert!(!app.minimap_on, "toggle should turn minimap off");
-        assert!(app.notice.contains("off"), "{}", app.notice);
-        let (off_mm, off_sb) = app.edge_chrome(80, 40, 20);
-        assert_eq!(off_mm, 0);
-        assert_eq!(off_sb, 1, "scrollbar remains when content scrolls");
-        app.palette = true;
-        app.query = "mm".into();
-        app.handle(CommandKey::Enter);
-        assert!(app.minimap_on);
-        assert!(app.notice.contains("on"), "{}", app.notice);
-    }
-
-    #[test]
-    fn unknown_palette_command_points_at_help() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(80, 24);
-        app.palette = true;
-        app.query = "definitely-not-a-command".into();
-        app.handle(CommandKey::Enter);
-        assert!(
-            app.notice.contains("unknown") && app.notice.contains("F1"),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn unknown_palette_typo_suggests_nearest_command() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(80, 24);
-        app.palette = true;
-        app.query = "mimimap".into();
-        app.handle(CommandKey::Enter);
-        assert!(
-            app.notice.contains("did you mean :minimap"),
-            "{}",
-            app.notice
-        );
-        app.palette = true;
-        app.query = "frmat".into();
-        app.handle(CommandKey::Enter);
-        assert!(
-            app.notice.contains("did you mean :format"),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn palette_tab_completes_top_match_then_enter_runs() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(100, 30);
-        assert!(app.minimap_on);
-        app.palette = true;
-        app.query = "mini".into();
-        let screen = rendered_at(&app, 100, 30);
-        assert!(
-            screen.contains("Tab") && screen.contains("minimap"),
-            "{screen}"
-        );
-        app.handle(CommandKey::Tab);
-        assert_eq!(app.query, "minimap");
-        assert!(app.palette, "Tab completes without closing");
-        app.handle(CommandKey::Enter);
-        assert!(!app.minimap_on, "completed :minimap should toggle off");
-        assert!(!app.palette);
-    }
-
-    #[test]
-    fn unsaved_buffer_save_explains_next_step() {
-        let mut app = EditorApp::new("scratch\n");
-        app.note_frame(80, 24);
-        assert!(app.focused().path.is_none());
-        app.handle(CommandKey::Char('s'));
-        assert!(
-            app.notice.contains("save needs a path")
-                && (app.notice.contains("rr") || app.notice.contains('o')),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn empty_console_names_build_and_run() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(100, 30);
-        app.terminals.open = true;
-        app.terminals.show_console = true;
-        app.terminals.console.clear();
-        let screen = rendered_at(&app, 100, 30);
-        assert!(
-            screen.contains("workbench output")
-                && (screen.contains('b') || screen.contains("builds")),
-            "{screen}"
-        );
-    }
-
-    #[test]
-    fn cancelling_a_plan_points_at_preview_keys() {
-        let mut app = EditorApp::new("hi\n");
-        app.note_frame(80, 24);
-        app.pending_plan = Some((PathBuf::from("."), vec!["echo".into(), "hi".into()]));
-        app.handle(CommandKey::Char('n'));
-        assert!(app.pending_plan.is_none());
-        assert!(
-            app.notice.contains("cancelled") && app.notice.contains('1'),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn closing_a_buffer_and_tab_toggle_explain_themselves() {
-        let mut app = EditorApp::new("keep\n");
-        app.add_buffer("drop", "drop\n");
-        app.note_frame(100, 30);
-        app.handle(CommandKey::Right);
-        app.handle(CommandKey::Char('w'));
-        assert_eq!(app.buffers.len(), 1);
-        assert!(
-            app.notice.contains("buffer closed") && app.notice.contains('o'),
-            "{}",
-            app.notice
-        );
-        let before = app.tab_enabled;
-        app.toggle_tab();
-        assert_ne!(app.tab_enabled, before);
-        assert!(
-            app.notice.contains("Tab completion"),
-            "{}",
-            app.notice
-        );
-    }
-
-    #[test]
-    fn empty_tree_filter_hint() {
-        let mut app = EditorApp::new("hi\n");
-        let root = temp_dir("empty-tree-hint");
-        app.set_workspace(root.clone());
-        app.tree.clear();
-        app.tree_query = Some("zzz".into());
-        app.tree_hits.clear();
-        let screen = rendered_at(&app, 80, 24);
-        assert!(
-            screen.contains("no files match") || screen.contains("Esc"),
-            "{screen}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn agent_welcome_names_backend_or_install_hint() {
-        let app = EditorApp::new("hi\n");
-        let joined = app.agent_log.join("\n");
-        assert!(
-            joined.contains("IDE_AGENT")
-                || joined.contains("Using ")
-                || joined.contains("workspace"),
-            "{joined}"
-        );
-    }
-
-    #[test]
-    fn gutter_hover_mentions_relative_toggle() {
-        let mut app = EditorApp::new("a\nb\nc\nd\ne\nf\ng\nh\n");
-        app.note_frame(80, 24);
-        let chrome = app.frame_chrome(Rect::new(0, 0, 80, 24));
-        let window = app.layout_window(chrome.content, app.axis());
-        let slice = layout::tile_slice(window, app.focus, app.view).expect("tile");
-        let gutter_col = slice.screen_x.saturating_add(1);
-        let gutter_row = slice.screen_y.saturating_add(2);
-        let hint = editor_chrome_hover(&app, &chrome, gutter_col, gutter_row)
-            .unwrap_or("");
-        assert!(
-            hint.to_ascii_lowercase().contains("rn")
-                || hint.to_ascii_lowercase().contains("breakpoint")
-                || hint.to_ascii_lowercase().contains("line"),
-            "hint={hint:?} at ({gutter_col},{gutter_row}) tile={slice:?}"
-        );
-        app.handle(CommandKey::Char('r'));
-        app.handle(CommandKey::Char('n'));
-        assert!(app.relative_line_numbers());
-        assert!(app.notice.contains("relative"));
-    }
-
-    #[test]
-    fn kitty_minimap_draw_keeps_unicode_placeholders() {
-        // SAFETY: test-only env so host_is_kitty matches Ghostty/Kitty.
-        std::env::set_var("TERM_PROGRAM", "ghostty");
-        let mut app = EditorApp::new(&"line\n".repeat(80));
-        app.graphics.prefer_kitty_from_env();
-        assert!(
-            minimap_gfx::host_is_kitty(),
-            "test requires Kitty/Ghostty probe"
-        );
-        app.editor_minimap_id = Some(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
-        app.minimap_on = true;
-        app.note_frame(120, 40);
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let buf = terminal.backend().buffer();
-        let placeholder = canvas::kitty_placeholder_cell(0, 0);
-        let hit = buf.content().iter().any(|cell| cell.symbol() == placeholder);
-        assert!(
-            hit,
-            "Kitty minimap cells must keep U+10EEEE placeholders across draws (blanking flashes)"
-        );
-    }
-
-    #[test]
-    fn git_gutter_click_explains_diff_status() {
-        let mut app = EditorApp::new("a\nb\nc\nd\n");
-        let root = temp_dir("git-gutter");
-        let path = root.join("demo.rs");
-        fs::write(&path, "a\nb\nc\nd\n").unwrap();
-        app.set_workspace(root.clone());
-        app.buffers[0].path = Some(path);
-        app.note_frame(80, 24);
-        let chrome = app.frame_chrome(Rect::new(0, 0, 80, 24));
-        let window = app.layout_window(chrome.content, app.axis());
-        let slice = layout::tile_slice(window, app.focus, app.view).expect("tile");
-        // local_x 1 = git stripe (after ●)
-        let git_col = slice.screen_x.saturating_add(2);
-        let row = slice.screen_y.saturating_add(2);
-        let hint = editor_chrome_hover(&app, &chrome, git_col, row).unwrap_or("");
-        assert!(
-            hint.to_ascii_lowercase().contains("git"),
-            "hint={hint:?}"
-        );
-        app.pointer(Pointer::Down { column: git_col, row }, 80, 24);
-        assert!(
-            app.notice.contains("git") || app.notice.contains("no local git"),
-            "{}",
-            app.notice
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn spatial_tab_control_stays_bottom_right() {
         let mut app = EditorApp::new("tab\n");
         app.tab_enabled = true;
@@ -12421,46 +13773,6 @@ mod tests {
     }
 
     #[test]
-    fn symbols_lens_lists_definitions_and_enter_jumps() {
-        let mut app = EditorApp::new(
-            "// skip\nfn alpha() {}\n\npub struct Beta;\nimpl Beta {}\nfn gamma() {}\n",
-        );
-        app.set_language("rust");
-        app.note_frame(80, 24);
-        app.handle(CommandKey::Char('z'));
-        app.handle(CommandKey::Char('l'));
-        assert_eq!(app.spatial.active_mode, SpatialMode::Lens);
-        assert!(
-            app.spatial_lines.iter().any(|l| l.contains("fn alpha")),
-            "{:?}",
-            app.spatial_lines
-        );
-        assert!(
-            app.spatial_lines.iter().any(|l| l.contains("struct Beta")),
-            "{:?}",
-            app.spatial_lines
-        );
-        // Type-to-filter down to gamma, then jump.
-        app.handle(CommandKey::Char('g'));
-        app.handle(CommandKey::Char('a'));
-        assert!(
-            app.spatial_lines.iter().all(|l| l.contains("gamma") || l.contains("no symbols")),
-            "filter ga → {:?}",
-            app.spatial_lines
-        );
-        assert!(app.spatial_filter == "ga", "{}", app.spatial_filter);
-        let screen = rendered_at(&app, 80, 24);
-        assert!(screen.contains("Symbols /ga") || screen.contains("/ga"), "{screen}");
-        app.handle(CommandKey::Enter);
-        assert_eq!(app.spatial.active_mode, SpatialMode::Idle);
-        let (line, _) = app
-            .focused()
-            .with_text(|text| line_col(text, app.focused().cursor));
-        assert_eq!(line + 1, 6, "gamma is on line 6");
-        assert!(app.notice.contains("jumped"), "{}", app.notice);
-    }
-
-    #[test]
     fn debug_file_launches_jdb_for_java() {
         let path = PathBuf::from("/tmp/demo/Hello.java");
         let (program, args) = debug_file("java", &path).expect("java debugger");
@@ -12485,6 +13797,61 @@ mod tests {
             pick_system(&systems, "rust", None).as_deref(),
             Some("cargo")
         );
+    }
+
+    #[test]
+    fn detect_make_xcode_and_project_suggestions() {
+        let root = temp_dir("project-matrix");
+        fs::write(root.join("Makefile"), "all:\n\t@echo hi\n").unwrap();
+        fs::create_dir_all(root.join(".idea")).unwrap();
+        fs::write(root.join(".idea/misc.xml"), "<project/>\n").unwrap();
+        let xcode = root.join("Demo.xcodeproj");
+        fs::create_dir_all(&xcode).unwrap();
+        fs::write(xcode.join("project.pbxproj"), "// !$*UTF8*$\n").unwrap();
+        let systems = detect_systems_fast(&root);
+        assert!(systems.iter().any(|s| s == "make"), "{systems:?}");
+        assert!(systems.iter().any(|s| s == "intellij"), "{systems:?}");
+        assert!(systems.iter().any(|s| s == "xcodebuild"), "{systems:?}");
+        assert_eq!(project_root(&root.join("src")), root);
+        let suggestions = ide_packages::project_suggestions(&root);
+        assert!(suggestions.iter().any(|s| s.system == "make"));
+        assert!(suggestions.iter().any(|s| s.system == "xcodebuild"));
+        assert!(suggestions.iter().any(|s| s.system == "intellij"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn free_agent_and_snippet_ghost_work() {
+        let root = temp_dir("agent-snippet");
+        fs::write(root.join("hello.rs"), "fn demo() {}\n").unwrap();
+        let mut app = EditorApp::new("fn");
+        app.set_workspace(root.clone());
+        app.set_language("rust");
+        app.tab_enabled = true;
+        editing(&mut app);
+        for _ in 0..2 {
+            app.handle(CommandKey::Right);
+        }
+        app.refresh_ghost();
+        assert!(
+            app.ghost
+                .as_ref()
+                .is_some_and(|g| g.text.contains("name") && g.replace_from.is_none()),
+            "expected rust fn snippet remainder, got {:?}",
+            app.ghost
+        );
+        app.handle(CommandKey::Tab);
+        assert!(app.text().contains("fn name"), "{}", app.text());
+
+        app.agent_focused = true;
+        app.agent_draft = "list".into();
+        app.submit_agent();
+        assert!(
+            app.agent_log.iter().any(|line| line.contains("hello.rs") || line.contains("free-local")),
+            "{:?}",
+            app.agent_log
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

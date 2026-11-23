@@ -1,6 +1,6 @@
-//! Editor chrome: breakpoint column, git diff marks, line numbers.
+//! Editor chrome: breakpoint column, fold chevrons, git diff marks, line numbers.
 //!
-//! Layout (left → right): `[bp][git][linenr ]` then code. Intuitive IDE defaults:
+//! Layout (left → right): `[bp][fold][git][linenr ]` then code. Intuitive IDE defaults:
 //! absolute numbers, optional relative distance on other lines (current stays absolute).
 
 use std::collections::{HashMap, HashSet};
@@ -9,6 +9,8 @@ use std::process::Command;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+
+use crate::fold::{chevron_span, Chevron};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitMark {
@@ -50,8 +52,8 @@ impl GutterState {
 
     pub fn width_for(&self, line_count: usize) -> u16 {
         let digits = ((line_count.max(1) as f32).log10().floor() as u16) + 1;
-        // bp(1) + git(1) + gap(1) + digits + gap(1)
-        1 + 1 + 1 + digits.max(2) + 1
+        // bp(1) + fold(1) + git(1) + gap(1) + digits + gap(1)
+        1 + 1 + 1 + 1 + digits.max(2) + 1
     }
 
     pub fn ensure_git_marks(&mut self, workspace: &Path, path: &Path, doc_revision: u64) {
@@ -70,9 +72,6 @@ impl GutterState {
     }
 
     /// Render one gutter row for `line` (1-based) with caret on `caret_line` (1-based).
-    ///
-    /// `light` selects ink that stays readable on cream hosts (White-on-cream
-    /// caret numbers were effectively invisible on Ghostty's default theme).
     pub fn line_spans(
         &self,
         path: Option<&Path>,
@@ -80,7 +79,7 @@ impl GutterState {
         caret_line: usize,
         line_count: usize,
         width: u16,
-        light: bool,
+        fold_chevron: Option<Chevron>,
     ) -> Vec<Span<'static>> {
         let digits = ((line_count.max(1) as f32).log10().floor() as usize) + 1;
         let digits = digits.max(2);
@@ -94,23 +93,10 @@ impl GutterState {
         } else {
             Span::raw(" ")
         };
+        let fold = chevron_span(fold_chevron);
         let git = match self.git_mark(path, line) {
-            GitMark::Added => Span::styled(
-                "┃",
-                Style::default().fg(if light {
-                    Color::Rgb(0x2e, 0x7d, 0x32)
-                } else {
-                    Color::Green
-                }),
-            ),
-            GitMark::Modified => Span::styled(
-                "┃",
-                Style::default().fg(if light {
-                    Color::Rgb(0xb5, 0x86, 0x00)
-                } else {
-                    Color::Yellow
-                }),
-            ),
+            GitMark::Added => Span::styled("┃", Style::default().fg(Color::Green)),
+            GitMark::Modified => Span::styled("┃", Style::default().fg(Color::Yellow)),
             GitMark::Deleted => Span::styled("▁", Style::default().fg(Color::Red)),
             GitMark::None => Span::raw(" "),
         };
@@ -122,21 +108,20 @@ impl GutterState {
         };
         let num_style = if line == caret_line {
             Style::default()
-                .fg(if light {
-                    Color::Rgb(0x1a, 0x1a, 0x1a)
-                } else {
-                    Color::White
-                })
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(if light {
-                Color::Rgb(0x6e, 0x6a, 0x5e)
-            } else {
-                Color::DarkGray
-            })
+            Style::default().fg(Color::DarkGray)
         };
-        let mut spans = vec![bp, git, Span::raw(" "), Span::styled(number, num_style), Span::raw(" ")];
-        let used = 1 + 1 + 1 + digits + 1;
+        let mut spans = vec![
+            bp,
+            fold,
+            git,
+            Span::raw(" "),
+            Span::styled(number, num_style),
+            Span::raw(" "),
+        ];
+        let used = 1 + 1 + 1 + 1 + digits + 1;
         if (used as u16) < width {
             spans.push(Span::raw(" ".repeat((width as usize).saturating_sub(used))));
         }
@@ -216,25 +201,15 @@ fn load_git_line_marks(workspace: &Path, path: &Path) -> HashMap<usize, GitMark>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GutterHit {
     Breakpoint,
-    /// Diff stripe between ● and the line number.
-    Git,
+    Fold,
     Number,
 }
 
 pub fn hit(column_in_gutter: u16, _width: u16) -> Option<GutterHit> {
     match column_in_gutter {
         0 => Some(GutterHit::Breakpoint),
-        1 => Some(GutterHit::Git),
+        1 => Some(GutterHit::Fold),
         _ => Some(GutterHit::Number),
-    }
-}
-
-pub fn git_mark_label(mark: GitMark) -> &'static str {
-    match mark {
-        GitMark::Added => "added",
-        GitMark::Modified => "modified",
-        GitMark::Deleted => "deleted nearby",
-        GitMark::None => "unchanged",
     }
 }
 
@@ -246,28 +221,23 @@ mod tests {
     fn relative_numbers_keep_absolute_on_caret_line() {
         let mut state = GutterState::default();
         state.relative_numbers = true;
-        let spans = state.line_spans(None, 5, 5, 99, 8, false);
+        let spans = state.line_spans(None, 5, 5, 99, 9, None);
         let joined: String = spans.iter().map(|s| s.content.clone()).collect();
         assert!(joined.contains('5'), "{joined}");
-        let spans = state.line_spans(None, 8, 5, 99, 8, false);
+        let spans = state.line_spans(None, 8, 5, 99, 9, None);
         let joined: String = spans.iter().map(|s| s.content.clone()).collect();
         assert!(joined.contains('3'), "{joined}");
     }
 
     #[test]
-    fn caret_line_ink_stays_visible_on_light_hosts() {
+    fn fold_column_hit_and_chevron() {
+        assert_eq!(hit(0, 9), Some(GutterHit::Breakpoint));
+        assert_eq!(hit(1, 9), Some(GutterHit::Fold));
+        assert_eq!(hit(2, 9), Some(GutterHit::Number));
         let state = GutterState::default();
-        let light = state.line_spans(None, 3, 3, 20, 8, true);
-        let dark = state.line_spans(None, 3, 3, 20, 8, false);
-        let light_num = light.iter().find(|s| s.content.contains('3')).expect("num");
-        let dark_num = dark.iter().find(|s| s.content.contains('3')).expect("num");
-        assert_eq!(
-            light_num.style.fg,
-            Some(Color::Rgb(0x1a, 0x1a, 0x1a)),
-            "cream hosts must not use White caret numbers"
-        );
-        assert_eq!(dark_num.style.fg, Some(Color::White));
-        assert_ne!(light_num.style.fg, dark_num.style.fg);
+        let spans = state.line_spans(None, 1, 1, 10, 9, Some(Chevron::Collapsed));
+        let joined: String = spans.iter().map(|s| s.content.clone()).collect();
+        assert!(joined.contains('▸'), "{joined}");
     }
 
     #[test]
@@ -278,13 +248,5 @@ mod tests {
         assert!(state.has_breakpoint(Some(&path), 12));
         assert!(!state.toggle_breakpoint(&path, 12));
         assert!(!state.has_breakpoint(Some(&path), 12));
-    }
-
-    #[test]
-    fn hit_separates_git_stripe_from_line_numbers() {
-        assert_eq!(hit(0, 8), Some(GutterHit::Breakpoint));
-        assert_eq!(hit(1, 8), Some(GutterHit::Git));
-        assert_eq!(hit(2, 8), Some(GutterHit::Number));
-        assert_eq!(hit(5, 8), Some(GutterHit::Number));
     }
 }

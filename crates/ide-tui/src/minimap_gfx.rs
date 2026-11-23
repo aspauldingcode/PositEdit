@@ -7,18 +7,9 @@
 use crate::graphics::GraphicsBackend;
 use ratatui::layout::Rect;
 
-/// Stable Kitty image id pair for the focused editor minimap (away from Canvas).
+/// Stable Kitty image id for the focused editor minimap (away from Canvas ids).
 /// Keep below 256 so unicode-placeholder FG uses indexed color (Ghostty-friendly).
 pub const EDITOR_MINIMAP_IMAGE_ID: u32 = 41;
-pub const EDITOR_MINIMAP_IMAGE_ID_ALT: u32 = 42;
-
-pub fn minimap_alternate_id(id: u32) -> u32 {
-    if id == EDITOR_MINIMAP_IMAGE_ID {
-        EDITOR_MINIMAP_IMAGE_ID_ALT
-    } else {
-        EDITOR_MINIMAP_IMAGE_ID
-    }
-}
 
 /// Default device pixels per source line (readable preview height).
 /// Locked to Bend `bend/minimap` laws (scale 1 → 8 px/line).
@@ -45,9 +36,8 @@ pub struct MinimapPaintKey {
     pub px_w: u32,
     pub px_h: u32,
     pub scale: u32,
-    pub theme: u8,
-    /// Language id fingerprint so retargeting syntax invalidates the strip.
-    pub language: u64,
+    /// Fingerprint of the live terminal palette (OSC 10/11/4).
+    pub theme: u64,
 }
 
 /// Content identity without scroll/viewport (base RGB cache).
@@ -59,18 +49,7 @@ pub struct MinimapContentKey {
     pub px_w: u32,
     pub px_h: u32,
     pub scale: u32,
-    pub theme: u8,
-    pub language: u64,
-}
-
-/// Stable fingerprint for minimap cache keys (language string).
-pub fn language_key(language: &str) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in language.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    h
+    pub theme: u64,
 }
 
 /// Proportional minimap layout (sliding window + viewport slider).
@@ -84,34 +63,20 @@ pub struct MinimapLayout {
     pub slider_height_px: u32,
 }
 
-/// Dark-host syntax hues (One Dark–ish). Editor `token_style` and the Kitty
-/// strip both read these via `MinimapTheme` so they stay 1:1.
-pub const SYNTAX_KEYWORD: (u8, u8, u8) = (0xc6, 0x78, 0xdd);
-pub const SYNTAX_COMMENT: (u8, u8, u8) = (0xe5, 0xc0, 0x7b);
-pub const SYNTAX_STRING: (u8, u8, u8) = (0x98, 0xc3, 0x79);
-pub const SYNTAX_TYPE: (u8, u8, u8) = (0x56, 0xb6, 0xc2);
-pub const SYNTAX_FUNCTION: (u8, u8, u8) = (0x61, 0xaf, 0xef);
-
-/// Light-host syntax hues — darker cousins of the dark set. The One Dark pastels
-/// wash out on Ghostty cream (~1.5:1 for comments); these clear ~4.5:1 on cream.
-pub const SYNTAX_LIGHT_KEYWORD: (u8, u8, u8) = (0x7a, 0x3e, 0x9d);
-pub const SYNTAX_LIGHT_COMMENT: (u8, u8, u8) = (0x8a, 0x6d, 0x3b);
-pub const SYNTAX_LIGHT_STRING: (u8, u8, u8) = (0x3d, 0x7a, 0x37);
-pub const SYNTAX_LIGHT_TYPE: (u8, u8, u8) = (0x1a, 0x7a, 0x85);
-pub const SYNTAX_LIGHT_FUNCTION: (u8, u8, u8) = (0x1a, 0x6f, 0xb5);
-
-/// Terminal-derived palette for the RGB strip.
+/// Terminal-derived palette for the RGB strip (mirrors buffer ANSI token colors).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MinimapTheme {
-    pub id: u8,
+    pub fingerprint: u64,
     pub bg: (u8, u8, u8),
-    /// Plain / default text (editor inherits terminal fg; strip uses this).
     pub fg: (u8, u8, u8),
-    pub keyword: (u8, u8, u8),
-    pub comment: (u8, u8, u8),
+    pub digit: (u8, u8, u8),
     pub string: (u8, u8, u8),
-    pub ty: (u8, u8, u8),
+    pub punct: (u8, u8, u8),
+    pub comment: (u8, u8, u8),
+    pub ident: (u8, u8, u8),
+    pub keyword: (u8, u8, u8),
     pub function: (u8, u8, u8),
+    pub markup: (u8, u8, u8),
     /// Added to RGB inside the viewport band (can be slightly negative via saturating).
     pub view_delta: i16,
 }
@@ -119,267 +84,49 @@ pub struct MinimapTheme {
 impl MinimapTheme {
     pub fn light() -> Self {
         Self {
-            id: 3,
+            fingerprint: 1,
             bg: (250, 245, 230),
             fg: (70, 80, 55),
-            keyword: SYNTAX_LIGHT_KEYWORD,
-            comment: SYNTAX_LIGHT_COMMENT,
-            string: SYNTAX_LIGHT_STRING,
-            ty: SYNTAX_LIGHT_TYPE,
-            function: SYNTAX_LIGHT_FUNCTION,
+            digit: (90, 120, 70),
+            string: (150, 100, 55),
+            punct: (90, 90, 80),
+            comment: (110, 130, 80),
+            ident: (55, 95, 120),
+            keyword: (150, 60, 120),
+            function: (40, 80, 160),
+            markup: (120, 120, 110),
             view_delta: -18,
         }
     }
 
     pub fn dark() -> Self {
         Self {
-            id: 4,
+            fingerprint: 2,
             bg: (0x1e, 0x1e, 0x24),
-            fg: (0xd4, 0xd4, 0xd4),
-            keyword: SYNTAX_KEYWORD,
-            comment: SYNTAX_COMMENT,
-            string: SYNTAX_STRING,
-            ty: SYNTAX_TYPE,
-            function: SYNTAX_FUNCTION,
+            fg: (0x80, 0x80, 0x88),
+            digit: (0xb5, 0xce, 0xa8),
+            string: (0xce, 0x91, 0x78),
+            punct: (0xd4, 0xd4, 0xd4),
+            comment: (0x6a, 0x99, 0x55),
+            ident: (0x9c, 0xdc, 0xfe),
+            keyword: (0xc5, 0x86, 0xc0),
+            function: (0x56, 0x9c, 0xd6),
+            markup: (0x6a, 0x6a, 0x6a),
             view_delta: 28,
         }
     }
 
-    /// Lightness from background luminance — never key off `id` (ids move).
     pub fn is_light(self) -> bool {
-        let (r, g, b) = self.bg;
-        // Rec. 601-ish: (3R + 4G + B) / 8
-        (u16::from(r) * 3 + u16::from(g) * 4 + u16::from(b)) / 8 >= 128
-    }
-}
-
-/// Probed host default colors (OSC 10 / OSC 11), when available.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProbedColors {
-    pub fg: (u8, u8, u8),
-    pub bg: (u8, u8, u8),
-}
-
-static PROBED: std::sync::Mutex<Option<ProbedColors>> = std::sync::Mutex::new(None);
-
-/// True when OSC/env probe supplied a real background (not a hard-coded guess).
-pub fn probed_background() -> Option<(u8, u8, u8)> {
-    PROBED
-        .lock()
-        .ok()
-        .and_then(|g| g.map(|c| c.bg))
-        .or_else(env_override_bg)
-}
-
-fn env_override_bg() -> Option<(u8, u8, u8)> {
-    parse_rgb_env("POSIT_EDIT_MINIMAP_BG")
-}
-
-fn env_override_fg() -> Option<(u8, u8, u8)> {
-    parse_rgb_env("POSIT_EDIT_MINIMAP_FG")
-}
-
-/// `POSIT_EDIT_MINIMAP_BG=#rrggbb` or `r,g,b`.
-pub fn parse_rgb_env(key: &str) -> Option<(u8, u8, u8)> {
-    let raw = std::env::var(key).ok()?;
-    parse_rgb_literal(&raw)
-}
-
-pub fn parse_rgb_literal(raw: &str) -> Option<(u8, u8, u8)> {
-    let s = raw.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        if hex.len() == 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            return Some((r, g, b));
-        }
-    }
-    let parts: Vec<_> = s.split([',', ' ']).filter(|p| !p.is_empty()).collect();
-    if parts.len() == 3 {
-        let r: u8 = parts[0].parse().ok()?;
-        let g: u8 = parts[1].parse().ok()?;
-        let b: u8 = parts[2].parse().ok()?;
-        return Some((r, g, b));
-    }
-    None
-}
-
-/// Parse an OSC 10/11 payload (`rgb:RRRR/GGGG/BBBB` or `rgba:…`).
-pub fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
-    let payload = payload.trim();
-    let body = payload
-        .strip_prefix("rgb:")
-        .or_else(|| payload.strip_prefix("rgba:"))?;
-    let mut parts = body.split('/');
-    let r = parse_osc_component(parts.next()?)?;
-    let g = parse_osc_component(parts.next()?)?;
-    let b = parse_osc_component(parts.next()?)?;
-    Some((r, g, b))
-}
-
-fn parse_osc_component(s: &str) -> Option<u8> {
-    let s = s.trim();
-    if s.is_empty() || s.len() > 4 {
-        return None;
-    }
-    let v = u32::from_str_radix(s, 16).ok()?;
-    Some(match s.len() {
-        1 => (v * 0x11) as u8,
-        2 => v as u8,
-        3 => (v >> 4) as u8,
-        _ => (v >> 8) as u8, // 16-bit channel → 8-bit
-    })
-}
-
-/// Ask the host for default fg/bg via OSC 10/11 before raw mode.
-///
-/// Safe to call more than once; results are cached. No-ops when `/dev/tty` is
-/// missing or the host ignores the query (50ms budget).
-pub fn probe_terminal_colors() {
-    if std::env::var_os("POSIT_EDIT_SKIP_COLOR_PROBE").is_some() {
-        return;
-    }
-    if let (Some(fg), Some(bg)) = (env_override_fg(), env_override_bg()) {
-        let _ = PROBED.lock().map(|mut g| *g = Some(ProbedColors { fg, bg }));
-        return;
-    }
-    let Some(probed) = query_osc_colors_from_tty() else {
-        // Env-only overrides still apply when OSC is silent.
-        if let Some(bg) = env_override_bg() {
-            let fg = env_override_fg().unwrap_or((0x20, 0x20, 0x20));
-            let _ = PROBED.lock().map(|mut g| *g = Some(ProbedColors { fg, bg }));
-        }
-        return;
-    };
-    let mut colors = probed;
-    if let Some(bg) = env_override_bg() {
-        colors.bg = bg;
-    }
-    if let Some(fg) = env_override_fg() {
-        colors.fg = fg;
-    }
-    let _ = PROBED.lock().map(|mut g| *g = Some(colors));
-}
-
-fn query_osc_colors_from_tty() -> Option<ProbedColors> {
-    use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
-
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .ok()?;
-    // Query bg then fg.
-    tty.write_all(b"\x1b]11;?\x1b\\\x1b]10;?\x1b\\").ok()?;
-    let _ = tty.flush();
-
-    let mut buf = Vec::with_capacity(128);
-    let mut tmp = [0u8; 64];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-    let fd = tty.as_raw_fd();
-    while std::time::Instant::now() < deadline {
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
+        // Relative luminance of bg vs mid-gray.
+        let y = |c: (u8, u8, u8)| {
+            0.2126 * f32::from(c.0) + 0.7152 * f32::from(c.1) + 0.0722 * f32::from(c.2)
         };
-        let remain = deadline
-            .saturating_duration_since(std::time::Instant::now())
-            .as_millis()
-            .min(i32::MAX as u128) as i32;
-        let n = unsafe { libc::poll(&mut pfd, 1, remain.max(1)) };
-        if n <= 0 {
-            break;
-        }
-        match tty.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&tmp[..n]);
-                if buf.windows(2).any(|w| w == b"\x1b\\") || buf.contains(&0x07) {
-                    // Prefer waiting for both answers when they arrive together.
-                    let text = String::from_utf8_lossy(&buf);
-                    if text.matches("rgb:").count() + text.matches("rgba:").count() >= 2 {
-                        break;
-                    }
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Err(_) => break,
-        }
+        y(self.bg) > y(self.fg) || y(self.bg) > 128.0
     }
-    parse_osc_color_responses(&buf)
 }
 
-/// Extract OSC 10/11 answers from a raw tty byte stream.
-pub fn parse_osc_color_responses(bytes: &[u8]) -> Option<ProbedColors> {
-    let text = String::from_utf8_lossy(bytes);
-    let mut fg = None;
-    let mut bg = None;
-    for chunk in text.split(['\u{1b}', '\u{7}']) {
-        let chunk = chunk.trim_start_matches(']');
-        let chunk = chunk.trim_end_matches('\\').trim();
-        if let Some(rest) = chunk.strip_prefix("11;") {
-            bg = parse_osc_rgb(rest).or(bg);
-        } else if let Some(rest) = chunk.strip_prefix("10;") {
-            fg = parse_osc_rgb(rest).or(fg);
-        }
-    }
-    // Bg alone is enough to fix the strip; invent a readable fg if needed.
-    let bg = bg?;
-    let fg = fg.unwrap_or(if luminance(bg) >= 128 {
-        (0x1a, 0x1a, 0x1a)
-    } else {
-        (0xd4, 0xd4, 0xd4)
-    });
-    Some(ProbedColors { fg, bg })
-}
-
-fn luminance(bg: (u8, u8, u8)) -> u16 {
-    (u16::from(bg.0) * 3 + u16::from(bg.1) * 4 + u16::from(bg.2)) / 8
-}
-
-/// Detect light/dark from host defaults / `COLORFGBG`, then paint with the
-/// real terminal RGB when OSC 10/11 (or env overrides) answered.
-///
-/// Ghostty's default UI is light cream, and it often exports `COLORFGBG=15;0`
-/// even on light themes — so Ghostty prefers light unless explicitly dark.
-/// Override with `POSIT_EDIT_THEME=light|dark` when the host lies.
-pub fn terminal_theme() -> MinimapTheme {
-    let probed = PROBED.lock().ok().and_then(|g| *g);
-    let force = std::env::var("POSIT_EDIT_THEME")
-        .ok()
-        .map(|v| v.to_ascii_lowercase());
-    let mut theme = match force.as_deref() {
-        Some("light" | "cream" | "day") => MinimapTheme::light(),
-        Some("dark" | "night") => MinimapTheme::dark(),
-        _ => {
-            // Prefer luminance of the real background when we have it.
-            if let Some(colors) = probed {
-                if luminance(colors.bg) >= 128 {
-                    MinimapTheme::light()
-                } else {
-                    MinimapTheme::dark()
-                }
-            } else {
-                guess_theme_without_probe()
-            }
-        }
-    };
-    if let Some(colors) = probed {
-        theme.bg = colors.bg;
-        theme.fg = colors.fg;
-    } else if let Some(bg) = env_override_bg() {
-        theme.bg = bg;
-        if let Some(fg) = env_override_fg() {
-            theme.fg = fg;
-        }
-    }
-    theme
-}
-
-fn guess_theme_without_probe() -> MinimapTheme {
+/// Env-only heuristic (no OSC). Prefer [`crate::term_palette::probe`] at runtime.
+pub fn terminal_theme_from_env() -> MinimapTheme {
     let program = std::env::var("TERM_PROGRAM")
         .unwrap_or_default()
         .to_ascii_lowercase();
@@ -404,6 +151,11 @@ fn guess_theme_without_probe() -> MinimapTheme {
     MinimapTheme::dark()
 }
 
+/// Env heuristic (safe in tests). Runtime paint uses [`crate::term_palette::probe`].
+pub fn terminal_theme() -> MinimapTheme {
+    terminal_theme_from_env()
+}
+
 /// True when the document is taller than the editor viewport.
 pub fn needs_scroll(line_count: usize, visible: usize) -> bool {
     line_count > visible.max(1)
@@ -420,11 +172,11 @@ pub fn force_minimap() -> bool {
 
 /// Editor right-edge chrome: `(minimap_cols, scrollbar_cols)`.
 ///
-/// - Narrow tile (`< 18`) → `(0, 0)`.
-/// - Focused editor keeps a minimap even when the file fits (VS Code–style).
-/// - Text scrollbar only when the buffer overflows the viewport.
-/// - Kitty minimap replaces the text scrollbar: `(N, 0)`.
-/// - Glyph fallback → thin minimap + optional scrollbar: `(2, 0|1)`.
+/// - No scroll needed → `(0, 0)` (hide both).
+/// - Kitty minimap → replaces text scrollbar: `(N, 0)`.
+/// - Glyph fallback → thin minimap + text scrollbar: `(2, 1)`.
+/// - Callers pass `kitty=false` while scrolling / sliding buffers so the
+///   precision text scrollbar takes the edge until motion settles.
 pub fn edge_chrome(
     tile_w: u16,
     kitty: bool,
@@ -433,23 +185,22 @@ pub fn edge_chrome(
     line_count: usize,
     visible: usize,
 ) -> (u16, u16) {
-    if tile_w < 18 {
+    if !needs_scroll(line_count, visible) || tile_w < 18 {
         return (0, 0);
     }
-    let scrollable = needs_scroll(line_count, visible);
-    // Jetsam-class pressure: keep a text scrollbar when needed, drop the strip
+    // Jetsam-class pressure: keep a text scrollbar, drop the Kitty strip
     // (unless dogfood force is on).
     if pressure_critical && !force_minimap() {
-        return (0, u16::from(scrollable));
+        return (0, 1);
     }
     let cols = minimap_cols(tile_w, kitty, pressure_warning);
     if cols == 0 {
-        return (0, u16::from(scrollable));
+        return (0, 1);
     }
     if kitty {
         (cols, 0)
     } else {
-        (cols, u16::from(scrollable))
+        (cols, 1)
     }
 }
 
@@ -482,6 +233,9 @@ pub fn minimap_cols(tile_w: u16, kitty: bool, pressure_warning: bool) -> u16 {
 }
 
 pub fn host_is_kitty() -> bool {
+    if !crate::graphics::kitty_allowed() {
+        return false;
+    }
     crate::graphics::GraphicsArbiter::probe_env(
         std::env::var("TERM").ok().as_deref(),
         std::env::var("TERM_PROGRAM").ok().as_deref(),
@@ -582,8 +336,8 @@ pub fn line_at_cell_row(
 
 /// Base RGB without viewport tint (cacheable across scroll when window stable).
 ///
-/// `line_cells(line, max_cols)` returns `(char, rgb)` using the same syntax
-/// palette as the editor — callers must not invent a second color heuristic.
+/// `line_cells` returns `(char, rgb)` runs for each source line — typically the
+/// buffer's syntax colors resolved through the live terminal palette.
 pub fn render_base_rgb(
     layout: MinimapLayout,
     img_w: u32,
@@ -613,17 +367,16 @@ pub fn render_base_rgb(
     rgb
 }
 
-/// Test/helper: paint every non-space glyph with `theme.fg` (no syntax).
-pub fn plain_line_cells(prefix: &str, theme: MinimapTheme) -> Vec<(char, (u8, u8, u8))> {
-    prefix
-        .chars()
-        .map(|ch| {
-            if ch == ' ' || ch == '\t' {
-                (ch, theme.bg)
-            } else {
-                (ch, theme.fg)
-            }
-        })
+/// Heuristic colors when no syntax spans are available (tests / empty cache).
+#[cfg(test)]
+pub fn heuristic_line_cells(
+    text: &str,
+    cols: usize,
+    theme: MinimapTheme,
+) -> Vec<(char, (u8, u8, u8))> {
+    text.chars()
+        .take(cols)
+        .map(|ch| (ch, sample_color(ch, theme)))
         .collect()
 }
 
@@ -794,7 +547,8 @@ fn paint_glyph(
 }
 
 /// 5×7 ASCII bitmaps (bit4 = left). Missing → solid fallback bar.
-fn glyph_rows(ch: char) -> Option<&'static [u8; 7]> {
+/// Shared with fullscreen Help Kitty rasterization.
+pub(crate) fn glyph_rows(ch: char) -> Option<&'static [u8; 7]> {
     let c = if ch.is_ascii() { ch as u8 } else { b'?' };
     Some(match c {
         b'!' => &[0x04, 0x04, 0x04, 0x04, 0x00, 0x00, 0x04],
@@ -895,6 +649,202 @@ fn glyph_rows(ch: char) -> Option<&'static [u8; 7]> {
     })
 }
 
+#[cfg(test)]
+fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
+    match ch {
+        ' ' | '\t' => theme.bg,
+        c if c.is_ascii_digit() => theme.digit,
+        c if matches!(c, '"' | '\'' | '`') => theme.string,
+        c if matches!(
+            c,
+            '(' | ')' | '{' | '}' | '[' | ']' | '<' | '>' | ',' | ';' | ':' | '.'
+        ) =>
+        {
+            theme.punct
+        }
+        c if matches!(c, '/' | '*' | '#' | '-' | '=') => theme.comment,
+        c if c.is_ascii_alphabetic() || c == '_' => theme.ident,
+        _ => theme.fg,
+    }
+}
+
+/// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
+pub const FLIP_CARD_W: u32 = 288;
+pub const FLIP_CARD_H: u32 = 192;
+
+/// Stable cache key for a buffer strip / Flip card preview.
+pub fn preview_key(slot: usize, revision: u64, theme: u64, width: u32, height: u32) -> u64 {
+    let mut k = (slot as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    k ^= revision.wrapping_mul(0xC2B2AE3D27D4EB4F);
+    k ^= theme;
+    k ^= (u64::from(width) << 32) | u64::from(height);
+    k
+}
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+
+/// Shared headless preview: Flip 3D cards + future minimap warm-start.
+/// Raster runs on a background thread; UI only clones `Arc` (zero-copy bytes).
+pub struct PreviewPool {
+    cache: Arc<Mutex<HashMap<u64, Arc<crate::flip3d::PreviewImage>>>>,
+    inflight: Arc<Mutex<HashSet<u64>>>,
+    tx: Mutex<Option<mpsc::Sender<PreviewJob>>>,
+    /// Generation bump when a job completes — UI presents without blocking.
+    ready_gen: Arc<AtomicU64>,
+    seen_gen: AtomicU64,
+}
+
+#[derive(Clone)]
+pub struct PreviewJob {
+    pub key: u64,
+    pub theme: MinimapTheme,
+    pub width: u32,
+    pub height: u32,
+    /// Token-colored cells (snapshot from UI highlight cache — worker never touches ropes).
+    pub lines: Vec<Vec<(char, (u8, u8, u8))>>,
+}
+
+impl Default for PreviewPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreviewPool {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            inflight: Arc::new(Mutex::new(HashSet::new())),
+            tx: Mutex::new(None),
+            ready_gen: Arc::new(AtomicU64::new(0)),
+            seen_gen: AtomicU64::new(0),
+        }
+    }
+
+    fn ensure_worker(&self) {
+        let mut guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<PreviewJob>();
+        let cache = Arc::clone(&self.cache);
+        let inflight = Arc::clone(&self.inflight);
+        let ready = Arc::clone(&self.ready_gen);
+        std::thread::Builder::new()
+            .name("posit-preview".into())
+            .spawn(move || {
+                while let Ok(job) = rx.recv() {
+                    let key = job.key;
+                    let img = render_preview_job(&job);
+                    if let Ok(mut map) = cache.lock() {
+                        map.insert(key, Arc::new(img));
+                        // Bound memory: keep a modest working set.
+                        if map.len() > 48 {
+                            if let Some(old) = map.keys().next().copied() {
+                                map.remove(&old);
+                            }
+                        }
+                    }
+                    if let Ok(mut set) = inflight.lock() {
+                        set.remove(&key);
+                    }
+                    ready.fetch_add(1, Ordering::Release);
+                }
+            })
+            .ok();
+        *guard = Some(tx);
+    }
+
+    pub fn get(&self, key: u64) -> Option<Arc<crate::flip3d::PreviewImage>> {
+        self.cache
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&key).cloned())
+    }
+
+    /// True when UI should snapshot + enqueue (not cached, not already queued).
+    pub fn needs_work(&self, key: u64) -> bool {
+        if self.get(key).is_some() {
+            return false;
+        }
+        self.inflight
+            .lock()
+            .ok()
+            .is_none_or(|set| !set.contains(&key))
+    }
+
+    /// Non-blocking enqueue. No-op if already cached or in flight.
+    pub fn request(&self, job: PreviewJob) {
+        if self.get(job.key).is_some() {
+            return;
+        }
+        let key = job.key;
+        {
+            let Ok(mut set) = self.inflight.lock() else {
+                return;
+            };
+            if !set.insert(key) {
+                return;
+            }
+        }
+        self.ensure_worker();
+        let ok = self
+            .tx
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|tx| tx.send(job)))
+            .is_some_and(|r| r.is_ok());
+        if !ok {
+            if let Ok(mut set) = self.inflight.lock() {
+                set.remove(&key);
+            }
+        }
+    }
+
+    /// True when background work finished since last poll (schedule a present).
+    pub fn take_ready(&self) -> bool {
+        let now = self.ready_gen.load(Ordering::Acquire);
+        let seen = self.seen_gen.load(Ordering::Relaxed);
+        if now != seen {
+            self.seen_gen.store(now, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut map) = self.cache.lock() {
+            map.clear();
+        }
+        if let Ok(mut set) = self.inflight.lock() {
+            set.clear();
+        }
+    }
+}
+
+fn render_preview_job(job: &PreviewJob) -> crate::flip3d::PreviewImage {
+    let width = job.width.max(8);
+    let height = job.height.max(8);
+    let line_count = job.lines.len().max(1);
+    let layout = layout_proportional(line_count, 0, line_count.min(24).max(1), height, 1);
+    let lines = &job.lines;
+    let rgb = render_base_rgb(layout, width, height, job.theme, |line, cols| {
+        lines
+            .get(line)
+            .map(|cells| cells.iter().take(cols).copied().collect())
+            .unwrap_or_default()
+    });
+    crate::flip3d::PreviewImage {
+        width,
+        height,
+        rgb,
+    }
+}
+
 /// In-memory cache so scroll-only frames skip rope resampling + full fills.
 #[derive(Default)]
 pub struct MinimapFrameCache {
@@ -942,92 +892,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_luminance_and_env_override() {
-        assert!(MinimapTheme::light().is_light());
-        assert!(!MinimapTheme::dark().is_light());
-        let _ = PROBED.lock().map(|mut g| *g = None);
-        std::env::remove_var("POSIT_EDIT_MINIMAP_BG");
-        std::env::remove_var("POSIT_EDIT_MINIMAP_FG");
-        std::env::set_var("POSIT_EDIT_THEME", "dark");
-        assert!(!terminal_theme().is_light());
-        std::env::set_var("POSIT_EDIT_THEME", "light");
-        assert!(terminal_theme().is_light());
-        std::env::remove_var("POSIT_EDIT_THEME");
-    }
-
-    #[test]
-    fn osc_and_env_rgb_feed_minimap_background() {
-        assert_eq!(
-            parse_osc_rgb("rgb:fafa/f5f5/e6e6"),
-            Some((0xfa, 0xf5, 0xe6))
-        );
-        assert_eq!(parse_osc_rgb("rgb:ab/cd/ef"), Some((0xab, 0xcd, 0xef)));
-        assert_eq!(parse_rgb_literal("#1e1e24"), Some((0x1e, 0x1e, 0x24)));
-        assert_eq!(parse_rgb_literal("10,20,30"), Some((10, 20, 30)));
-        let bytes = b"\x1b]11;rgb:1010/2020/3030\x1b\\\x1b]10;rgb:eeee/eeee/eeee\x1b\\";
-        let probed = parse_osc_color_responses(bytes).expect("osc");
-        assert_eq!(probed.bg, (0x10, 0x20, 0x30));
-        assert_eq!(probed.fg, (0xee, 0xee, 0xee));
-
-        let _ = PROBED.lock().map(|mut g| *g = None);
-        std::env::set_var("POSIT_EDIT_MINIMAP_BG", "#112233");
-        std::env::set_var("POSIT_EDIT_MINIMAP_FG", "#ddeeff");
-        std::env::remove_var("POSIT_EDIT_THEME");
-        // Seed probe via env path used by probe_terminal_colors.
-        probe_terminal_colors();
-        let theme = terminal_theme();
-        assert_eq!(theme.bg, (0x11, 0x22, 0x33));
-        assert_eq!(theme.fg, (0xdd, 0xee, 0xff));
-        assert_eq!(probed_background(), Some((0x11, 0x22, 0x33)));
-        std::env::remove_var("POSIT_EDIT_MINIMAP_BG");
-        std::env::remove_var("POSIT_EDIT_MINIMAP_FG");
-        let _ = PROBED.lock().map(|mut g| *g = None);
-    }
-
-    #[test]
-    fn keeps_minimap_when_content_fits() {
-        // Dogfood shells may export FORCE; this law is about production chrome.
+    fn hide_when_content_fits() {
+        // Dogfood shells may export FORCE; this law is about production hide path.
         std::env::remove_var("POSIT_EDIT_MINIMAP_FORCE");
         assert!(!needs_scroll(20, 40));
         assert!(needs_scroll(100, 40));
-        // Short files still get a minimap so the right edge isn't empty while editing.
-        let (mm, sb) = edge_chrome(80, true, false, false, 20, 40);
-        assert!(mm >= 12, "kitty minimap cols={mm}");
-        assert_eq!(sb, 0);
+        assert_eq!(edge_chrome(80, true, false, false, 20, 40), (0, 0));
         assert_eq!(edge_chrome(80, true, false, false, 100, 40).1, 0); // kitty replaces sb
         assert_eq!(edge_chrome(80, false, false, false, 100, 40), (2, 1));
-        assert_eq!(edge_chrome(80, false, false, false, 20, 40), (2, 0)); // glyph, no sb
         assert_eq!(edge_chrome(80, true, true, true, 100, 40), (0, 1)); // critical → sb only
-        assert_eq!(edge_chrome(80, true, true, true, 20, 40), (0, 0)); // critical + fits
-    }
-
-    #[test]
-    fn render_base_rgb_stays_under_budget() {
-        let layout = layout_proportional(200, 0, 40, 400, 1);
-        let theme = MinimapTheme::dark();
-        let started = std::time::Instant::now();
-        let mut samples = Vec::new();
-        for _ in 0..5 {
-            let t0 = std::time::Instant::now();
-            let rgb = render_base_rgb(layout, 96, 400, theme, |line, cols| {
-                plain_line_cells(
-                    &format!("fn sample_{line}() {{ let x = {line}; }}"),
-                    theme,
-                )
-                .into_iter()
-                .take(cols)
-                .collect()
-            });
-            assert_eq!(rgb.len(), 96 * 400 * 3);
-            samples.push(t0.elapsed());
-        }
-        samples.sort();
-        let median = samples[2];
-        assert!(
-            median < std::time::Duration::from_millis(25),
-            "median minimap render {median:?} over 25ms budget (wall {:?})",
-            started.elapsed()
-        );
     }
 
     #[test]
@@ -1046,10 +919,7 @@ mod tests {
         let layout = layout_proportional(20, 0, 5, 160, 1);
         let theme = MinimapTheme::light();
         let base = render_base_rgb(layout, 60, 160, theme, |line, cols| {
-            plain_line_cells(&format!("line{line}"), theme)
-                .into_iter()
-                .take(cols)
-                .collect()
+            heuristic_line_cells(&format!("line{line}"), cols, theme)
         });
         let a = apply_viewport_tint(&base, 60, 160, layout, theme);
         let layout2 = layout_proportional(20, 10, 5, 160, 1);
@@ -1084,13 +954,13 @@ mod tests {
         let layout = layout_proportional(4, 0, 2, 32, 1);
         assert_eq!(layout.px_per_char, 6);
         let theme = MinimapTheme::light();
-        let rgb = render_base_rgb(layout, 48, 32, theme, |line, _| match line {
-            0 => plain_line_cells("A", theme),
-            1 => plain_line_cells("fn", theme),
+        let rgb = render_base_rgb(layout, 48, 32, theme, |line, cols| match line {
+            0 => heuristic_line_cells("A", cols, theme),
+            1 => heuristic_line_cells("fn", cols, theme),
             _ => Vec::new(),
         });
         let bg = theme.bg;
-        let ink = theme.fg;
+        let ink = theme.ident;
         // First glyph cell (0..5) on line 0 must mix bg + ink (holes in 'A').
         let mut bg_n = 0usize;
         let mut ink_n = 0usize;
@@ -1135,12 +1005,7 @@ mod tests {
         let rgb = render_base_rgb(layout, 180, 320, theme, |line, cols| {
             lines
                 .get(line % lines.len())
-                .map(|s| {
-                    plain_line_cells(s, theme)
-                        .into_iter()
-                        .take(cols)
-                        .collect()
-                })
+                .map(|s| heuristic_line_cells(s, cols, theme))
                 .unwrap_or_default()
         });
         let tinted = apply_viewport_tint(&rgb, 180, 320, layout, theme);

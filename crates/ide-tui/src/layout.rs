@@ -71,6 +71,7 @@ pub struct CanvasPane {
     pub width: Option<u16>,
 }
 
+#[allow(dead_code)]
 pub fn chrome(
     area: Rect,
     palette: bool,

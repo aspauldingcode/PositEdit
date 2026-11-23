@@ -1,0 +1,7 @@
+# Suggested adapters. Resolve executables in workspace environment; no implicit install.
+id = "markdown"
+extensions = ["md", "markdown"]
+server = "none"
+build = "none"
+test = "none"
+debugger = "none"

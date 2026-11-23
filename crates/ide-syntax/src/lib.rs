@@ -1,11 +1,19 @@
 //! Language detection, tree-sitter highlighting, and manual formatting.
 //! Formatters run only when `format_manually` is called.
+//!
+//! Optional nixpkgs `tree-sitter-grammars.withPlugins (_: allGrammars)` farms
+//! are loaded from `POSIT_TREE_SITTER_GRAMMARS` (see `dynamic`).
+mod dynamic;
 mod extra;
+mod fold;
 mod format;
 mod highlight;
+mod snippets;
 
+pub use fold::{fold_ranges, FoldRange};
 pub use format::{format_manually, format_with, formatter_for, FormatOutcome, Formatter};
 pub use highlight::{node_at_byte, NodeRange};
+pub use snippets::{expand as expand_snippet, match_trigger, snippets_for, Snippet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +46,16 @@ pub enum TokenKind {
     String,
     Type,
     Function,
+    /// Markdown / rich-text headings (`# Title`).
+    Heading,
+    /// Markdown strong emphasis (`**bold**`).
+    Bold,
+    /// Markdown emphasis (`*italic*` / `_italic_`).
+    Italic,
+    /// Markup delimiters (`**`, `#`, `|`, …) — dimmed in the buffer.
+    Markup,
+    /// Markdown table row cells.
+    Table,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +144,20 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
         }
         if let Some(language) = extra::language_for_path(path) {
             return language.to_string();
+        }
+        if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+            if let Some(language) = dynamic::language_for_extension(&ext.to_ascii_lowercase()) {
+                return language.to_string();
+            }
+        }
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            let lower = name.to_ascii_lowercase();
+            if lower == "dockerfile" {
+                return "dockerfile".to_string();
+            }
+            if lower == "makefile" || lower == "gnumakefile" {
+                return "make".to_string();
+            }
         }
     }
     if let Some(language) = shebang_language(text) {
@@ -342,11 +374,31 @@ mod tests {
         let spans = highlight("markdown", markdown);
         assert_eq!(
             highlight::covers(markdown, &spans, "#"),
-            Some(TokenKind::Keyword)
+            Some(TokenKind::Markup)
+        );
+        assert_eq!(
+            highlight::covers(markdown, &spans, "Title"),
+            Some(TokenKind::Heading)
         );
         assert_eq!(
             highlight::covers(markdown, &spans, "code"),
             Some(TokenKind::String)
+        );
+        let rich = "# Welcome\n\n**bold** and *italic*\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
+        let rich_spans = highlight("markdown", rich);
+        assert_eq!(
+            highlight::covers(rich, &rich_spans, "bold"),
+            Some(TokenKind::Bold)
+        );
+        assert_eq!(
+            highlight::covers(rich, &rich_spans, "italic"),
+            Some(TokenKind::Italic)
+        );
+        assert!(
+            rich_spans
+                .iter()
+                .any(|span| span.kind == TokenKind::Table),
+            "expected table cell spans: {rich_spans:?}"
         );
         let shell = "set -eu\n# note\n";
         let spans = highlight("shell", shell);
@@ -418,7 +470,9 @@ mod tests {
     #[test]
     fn formatters_match_shipped_profiles_and_do_not_run_themselves() {
         for profile in profiles() {
-            let declared = profile.formatter.expect(&profile.id);
+            let Some(declared) = profile.formatter.as_deref() else {
+                continue;
+            };
             let tool = formatter_for(&profile.id).unwrap_or_else(|| panic!("{}", profile.id));
             assert!(
                 declared.split_whitespace().next() == Some(tool.program),
@@ -454,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn nix_format_falls_back_when_nixfmt_missing() {
+    fn nix_format_uses_nixfmt_only() {
         let source = "{ a=1; }\n";
         match format_manually("nix", source) {
             FormatOutcome::Applied(text) => {
@@ -465,8 +519,8 @@ mod tests {
             FormatOutcome::Unavailable { program } => {
                 assert!(program.contains("nixfmt"), "{program}");
                 assert!(
-                    program.contains("alejandra") || program.contains("nixpkgs-fmt"),
-                    "{program}"
+                    !program.contains("alejandra") && !program.contains("nixpkgs-fmt"),
+                    "nix formatter must not fall back to alejandra/nixpkgs-fmt: {program}"
                 );
             }
             FormatOutcome::Failed { detail, .. } => panic!("nix format failed: {detail}"),

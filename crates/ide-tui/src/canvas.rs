@@ -8,13 +8,93 @@
 use crate::graphics::{GraphicsArbiter, GraphicsBackend};
 use ratatui::layout::Rect;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
+
+/// Next Kitty image id — stable per surface for the process lifetime.
+fn alloc_kitty_id() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(2_000);
+    NEXT.fetch_add(1, Ordering::Relaxed).max(1)
+}
+
+/// Ensure Android Emulator children see SDK root + platform-tools ADB.
+fn inject_android_sdk_env(command: &mut Command) {
+    let mut roots = Vec::new();
+    for key in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Ok(value) = std::env::var(key) {
+            roots.push(PathBuf::from(value));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(&home).join("Library/Android/sdk"));
+        roots.push(PathBuf::from(home).join("Android/Sdk"));
+    }
+    let sdk = roots.into_iter().find(|root| {
+        root.join("platform-tools").is_dir() || root.join("emulator/emulator").is_file()
+    });
+    let Some(sdk) = sdk else {
+        return;
+    };
+    if std::env::var_os("ANDROID_HOME").is_none() {
+        command.env("ANDROID_HOME", &sdk);
+    }
+    if std::env::var_os("ANDROID_SDK_ROOT").is_none() {
+        command.env("ANDROID_SDK_ROOT", &sdk);
+    }
+    let adb = sdk.join("platform-tools/adb");
+    if adb.is_file() {
+        command.env("ANDROID_ADB", &adb);
+        if std::env::var_os("IDE_ADB").is_none() {
+            command.env("IDE_ADB", &adb);
+        }
+    }
+}
+
+/// Session cache: last good PNG for a (kind, target) so reopen / tab reuse is instant.
+#[derive(Debug, Default)]
+pub struct FrameCache {
+    entries: HashMap<String, CachedFrame>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedFrame {
+    png: Vec<u8>,
+    meta: FrameMeta,
+}
+
+impl FrameCache {
+    fn key(kind: &str, target: &str) -> String {
+        format!("{kind}\0{target}")
+    }
+
+    pub fn get(&self, kind: &str, target: &str) -> Option<(Vec<u8>, FrameMeta)> {
+        self.entries
+            .get(&Self::key(kind, target))
+            .map(|entry| (entry.png.clone(), entry.meta.clone()))
+    }
+
+    pub fn insert(&mut self, kind: &str, target: &str, png: Vec<u8>, meta: FrameMeta) {
+        if png.is_empty() {
+            return;
+        }
+        // Cap entries so a long session cannot retain unbounded screenshots.
+        const MAX: usize = 8;
+        let key = Self::key(kind, target);
+        if self.entries.len() >= MAX && !self.entries.contains_key(&key) {
+            if let Some(oldest) = self.entries.keys().next().cloned() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(key, CachedFrame { png, meta });
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct FrameMeta {
@@ -60,10 +140,8 @@ pub struct CanvasSurface {
     child: Option<Child>,
     revision: u64,
     painted_revision: u64,
-    /// Currently displayed Kitty image id (placeholders bind here).
-    kitty_front: u32,
-    /// Inactive id for the next upload (double-buffer; never blank the front).
-    kitty_back: u32,
+    /// Stable Kitty image id for this surface (content replaces in-place).
+    kitty_id: u32,
     last_mtime: Option<SystemTime>,
     last_poll: Instant,
     /// Last published pane geometry — avoid rewriting the same JSON every frame.
@@ -71,6 +149,12 @@ pub struct CanvasSurface {
     /// Cached pixel box from geom (for click mapping without disk reads).
     geom_pixels: Option<(f64, f64)>,
     meta: FrameMeta,
+    /// Last PNG bytes — instant Kitty retransmit without disk IO.
+    cached_png: Option<Vec<u8>>,
+    /// Last cell box we transmitted/placed for this surface.
+    placed_size: Option<(u16, u16)>,
+    /// True after a successful Kitty transmit; placeholders can rebind without upload.
+    kitty_resident: bool,
     /// Drag origin in canvas-local cells (content area).
     drag_origin: Option<(u16, u16)>,
     last_cell: Option<(u16, u16)>,
@@ -84,9 +168,8 @@ impl CanvasSurface {
         self.drag_origin.is_some()
     }
 
-    /// Test helper: a surface with no capture child.
-    #[cfg(test)]
-    pub fn test_stub(kind: &str, target: &str) -> Self {
+    /// Text / markdown preview pane — no capture worker, no Kitty image.
+    pub fn text_pane(kind: &str, target: &str) -> Self {
         Self {
             kind: kind.to_string(),
             title: "Canvas".into(),
@@ -98,8 +181,7 @@ impl CanvasSurface {
             child: None,
             revision: 0,
             painted_revision: 0,
-            kitty_front: kitty_pair_for_kind(kind).0,
-            kitty_back: kitty_pair_for_kind(kind).1,
+            kitty_id: alloc_kitty_id(),
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,
@@ -107,21 +189,33 @@ impl CanvasSurface {
             meta: FrameMeta {
                 kind: kind.to_string(),
                 scale: 1.0,
-                coordinate_space: if kind == "phone" {
-                    "display-points".into()
-                } else {
-                    "css-pixels".into()
-                },
+                coordinate_space: "css-pixels".into(),
                 target: target.to_string(),
                 ..FrameMeta::default()
             },
+            cached_png: None,
+            placed_size: None,
+            kitty_resident: false,
             drag_origin: None,
             last_cell: None,
             pressed_action: false,
         }
     }
 
-    pub fn start(kind: &str, workspace: &Path, program: &str, args: &[String]) -> io::Result<Self> {
+    /// Test helper: a surface with no capture child.
+    #[cfg(test)]
+    pub fn test_stub(kind: &str, target: &str) -> Self {
+        Self::text_pane(kind, target)
+    }
+
+
+    pub fn start_with_cache(
+        kind: &str,
+        workspace: &Path,
+        program: &str,
+        args: &[String],
+        cache: Option<&FrameCache>,
+    ) -> io::Result<Self> {
         let dir = std::env::temp_dir().join(format!("posit-canvas-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
         let frame_path = dir.join(format!("{kind}.png"));
@@ -161,21 +255,27 @@ impl CanvasSurface {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // Android Emulator Extended Controls need SDK-root ADB; seed env when missing.
+        if kind == "android" {
+            inject_android_sdk_env(&mut command);
+        }
+        if let Some(path) = crate::terminal::runtime_path_override() {
+            command.env("PATH", path);
+        }
         let child = command.spawn()?;
-        Ok(Self {
+        let mut surface = Self {
             kind: kind.to_string(),
             // Pane chrome is always titled "Canvas"; kind shows as a tab when needed.
             title: "Canvas".into(),
-            target,
-            frame_path,
+            target: target.clone(),
+            frame_path: frame_path.clone(),
             meta_path,
             geom_path,
             nudge_path,
             child: Some(child),
             revision: 0,
             painted_revision: 0,
-            kitty_front: kitty_pair_for_kind(kind).0,
-            kitty_back: kitty_pair_for_kind(kind).1,
+            kitty_id: alloc_kitty_id(),
             last_mtime: None,
             last_poll: Instant::now()
                 .checked_sub(Duration::from_secs(2))
@@ -190,13 +290,25 @@ impl CanvasSurface {
                 } else {
                     "css-pixels".into()
                 },
-                target: String::new(),
+                target: target.clone(),
                 ..FrameMeta::default()
             },
+            cached_png: None,
+            placed_size: None,
+            kitty_resident: false,
             drag_origin: None,
             last_cell: None,
             pressed_action: false,
-        })
+        };
+        // Seed from session cache so Kitty can paint before the capture worker writes.
+        if let Some((png, meta)) = cache.and_then(|c| c.get(kind, &target)) {
+            let _ = fs::write(&frame_path, &png);
+            surface.cached_png = Some(png);
+            surface.meta = meta;
+            surface.revision = 1;
+            surface.painted_revision = 0;
+        }
+        Ok(surface)
     }
 
     pub fn frame_path(&self) -> &Path {
@@ -258,6 +370,14 @@ impl CanvasSurface {
         if self.last_mtime != Some(mtime) {
             self.last_mtime = Some(mtime);
             self.revision = self.revision.saturating_add(1);
+            // Refresh memory cache from disk when the worker publishes a new frame.
+            if let Ok(bytes) = fs::read(&self.frame_path) {
+                if !bytes.is_empty() {
+                    self.cached_png = Some(bytes);
+                }
+            }
+            // New content replaces the prior Kitty payload under the same id.
+            self.kitty_resident = false;
         }
         self.needs_paint()
     }
@@ -267,25 +387,52 @@ impl CanvasSurface {
     }
 
     pub fn has_frame(&self) -> bool {
-        self.revision > 0
+        self.revision > 0 || self.cached_png.as_ref().is_some_and(|b| !b.is_empty())
     }
 
-    /// Id that currently owns the on-screen placeholders.
-    pub fn display_image_id(&self) -> u32 {
-        self.kitty_front
+    pub fn next_image_id(&self) -> u32 {
+        self.kitty_id
     }
 
-    /// Inactive id — upload the next frame here before swapping.
-    pub fn upload_image_id(&self) -> u32 {
-        self.kitty_back
+    pub fn placed_size(&self) -> Option<(u16, u16)> {
+        self.placed_size
     }
 
-    pub fn mark_painted(&mut self) {
+    pub fn kitty_resident(&self) -> bool {
+        self.kitty_resident
+    }
+
+    pub fn cached_png(&self) -> Option<&[u8]> {
+        self.cached_png.as_deref()
+    }
+
+    pub fn set_cached_png(&mut self, png: Vec<u8>) {
+        if !png.is_empty() {
+            self.cached_png = Some(png);
+        }
+    }
+
+    pub fn mark_painted(&mut self, size: (u16, u16), resident: bool) {
         self.painted_revision = self.revision;
-        // Front shows what we just bound; back is free for the next upload.
-        std::mem::swap(&mut self.kitty_front, &mut self.kitty_back);
+        self.placed_size = Some(size);
+        self.kitty_resident = resident;
     }
 
+    pub fn mark_kitty_evicted(&mut self) {
+        self.kitty_resident = false;
+        self.placed_size = None;
+    }
+
+    /// Snapshot current frame into the session cache (call before stop/close).
+    pub fn store_in_cache(&self, cache: &mut FrameCache) {
+        if let Some(png) = self.cached_png.clone() {
+            cache.insert(&self.kind, &self.target, png, self.meta.clone());
+        } else if let Ok(png) = fs::read(&self.frame_path) {
+            if !png.is_empty() {
+                cache.insert(&self.kind, &self.target, png, self.meta.clone());
+            }
+        }
+    }
 
     /// Kill capture immediately. Quit must not wait on screenshot workers.
     pub fn stop(&mut self) {
@@ -789,13 +936,13 @@ fn kitty_mark(index: usize) -> char {
 }
 
 /// Unicode placeholder glyph for one cell of a virtual Kitty placement.
-///
-/// Every cell needs row+column diacritics — bare U+10EEEE smears on Ghostty.
+#[allow(dead_code)]
 pub fn kitty_placeholder_cell(row: usize, col: usize) -> String {
     format!("\u{10EEEE}{}{}", kitty_mark(row), kitty_mark(col))
 }
 
 /// FG color that binds placeholders to `image_id` (indexed when id < 256).
+#[allow(dead_code)]
 pub fn kitty_placeholder_fg(image_id: u32) -> ratatui::style::Color {
     if image_id < 256 {
         ratatui::style::Color::Indexed(image_id as u8)
@@ -843,41 +990,20 @@ pub fn write_kitty_placeholders(
     Ok(())
 }
 
-/// Stable Kitty id pair per Canvas kind (both < 256 for indexed placeholder FG).
-pub fn kitty_pair_for_kind(kind: &str) -> (u32, u32) {
-    match kind {
-        "browser" => (20, 21),
-        "phone" => (22, 23),
-        "android" => (24, 25),
-        _ => (26, 27),
-    }
-}
-
 /// Emit a Kitty virtual placement covering exactly `inner` cells with the PNG at `path`.
 ///
 /// Uses Unicode placeholders (`U=1`) so Ghostty/kitty size the image to the Canvas
 /// pane — never the full terminal window.
 ///
-/// Convenience: upload without retiring another id (tests / one-shot paints).
-#[cfg(test)]
+/// Uses direct (`t=d`) transmission for Ghostty compatibility (file medium may be
+/// disabled). Callers must only invoke this when the frame is dirty — idle redraws
+/// rebind placeholders without re-uploading.
 pub fn paint_kitty_png(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
     inner: Rect,
     path: &Path,
     image_id: u32,
-) -> io::Result<bool> {
-    paint_kitty_png_swap(out, arbiter, inner, path, image_id, None)
-}
-
-/// Upload `path` to `image_id`, bind placeholders, then optionally delete `retire_id`.
-pub fn paint_kitty_png_swap(
-    out: &mut impl Write,
-    arbiter: &mut GraphicsArbiter,
-    inner: Rect,
-    path: &Path,
-    image_id: u32,
-    retire_id: Option<u32>,
 ) -> io::Result<bool> {
     if inner.width < 2 || inner.height < 2 {
         return Ok(false);
@@ -890,33 +1016,42 @@ pub fn paint_kitty_png_swap(
         Ok(bytes) if !bytes.is_empty() => bytes,
         _ => return Ok(false),
     };
-    paint_kitty_png_bytes_swap(out, arbiter, inner, &bytes, image_id, retire_id)
+    // Drop any prior placement for this id before re-binding to the new cell box.
+    write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    let b64 = base64_encode(&bytes);
+    let cols = inner.width;
+    let rows = inner.height;
+    // Virtual placement: image is shown only where placeholders for this id exist.
+    let box_params = format!("U=1,c={cols},r={rows},z=-1073741825");
+    let mut first = true;
+    let mut rest = b64.as_str();
+    while !rest.is_empty() {
+        let take = rest.len().min(4096);
+        let (chunk, next) = rest.split_at(take);
+        let more = if next.is_empty() { 0 } else { 1 };
+        if first {
+            write!(
+                out,
+                "\x1b_Ga=T,f=100,t=d,i={image_id},q=2,{box_params},m={more};{chunk}\x1b\\"
+            )?;
+            first = false;
+        } else {
+            write!(out, "\x1b_Gm={more};{chunk}\x1b\\")?;
+        }
+        rest = next;
+    }
+    write_kitty_placeholders(out, inner, image_id)?;
+    out.flush()?;
+    Ok(true)
 }
 
-/// Convenience wrapper without retire (kept for unit tests).
-#[cfg(test)]
-#[allow(dead_code)]
+/// Emit a Kitty virtual placement from in-memory PNG bytes (Ghostty-proven `f=100`).
 pub fn paint_kitty_png_bytes(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
     inner: Rect,
     png: &[u8],
     image_id: u32,
-) -> io::Result<bool> {
-    paint_kitty_png_bytes_swap(out, arbiter, inner, png, image_id, None)
-}
-
-/// Upload PNG to `image_id` without blanking the visible frame first.
-///
-/// Ghostty blanks cells when the *shown* id is retransmitted ([#15124](https://github.com/ghostty-org/ghostty/discussions/15124)).
-/// Upload the next frame to the inactive id, retarget placeholders, then retire the old id.
-pub fn paint_kitty_png_bytes_swap(
-    out: &mut impl Write,
-    arbiter: &mut GraphicsArbiter,
-    inner: Rect,
-    png: &[u8],
-    image_id: u32,
-    retire_id: Option<u32>,
 ) -> io::Result<bool> {
     if inner.width < 2 || inner.height < 2 || png.is_empty() || image_id == 0 {
         return Ok(false);
@@ -925,7 +1060,7 @@ pub fn paint_kitty_png_bytes_swap(
     if backend != GraphicsBackend::Kitty {
         return Ok(false);
     }
-    // Never delete `image_id` before transmit — that blanks the pane for 10–20ms+.
+    write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
     let b64 = base64_encode(png);
     let cols = inner.width;
     let rows = inner.height;
@@ -948,11 +1083,6 @@ pub fn paint_kitty_png_bytes_swap(
         rest = next;
     }
     write_kitty_placeholders(out, inner, image_id)?;
-    if let Some(old) = retire_id {
-        if old != 0 && old != image_id {
-            write!(out, "\x1b_Ga=d,d=i,i={old},q=2\x1b\\")?;
-        }
-    }
     out.flush()?;
     Ok(true)
 }
@@ -1074,7 +1204,6 @@ const CRC32_TABLE: [u32; 256] = {
 ///
 /// Same Ghostty-proven path as Canvas: PNG `f=100` + `U=1` unicode placeholders.
 /// Glyph minimap is only for hosts that are not Kitty/Ghostty.
-#[cfg(test)]
 pub fn paint_kitty_rgb(
     out: &mut impl Write,
     arbiter: &mut GraphicsArbiter,
@@ -1084,23 +1213,10 @@ pub fn paint_kitty_rgb(
     height: u32,
     image_id: u32,
 ) -> io::Result<bool> {
-    paint_kitty_rgb_swap(out, arbiter, inner, rgb, width, height, image_id, None)
-}
-
-pub fn paint_kitty_rgb_swap(
-    out: &mut impl Write,
-    arbiter: &mut GraphicsArbiter,
-    inner: Rect,
-    rgb: &[u8],
-    width: u32,
-    height: u32,
-    image_id: u32,
-    retire_id: Option<u32>,
-) -> io::Result<bool> {
     let Some(png) = encode_rgb_png(width, height, rgb) else {
         return Ok(false);
     };
-    paint_kitty_png_bytes_swap(out, arbiter, inner, &png, image_id, retire_id)
+    paint_kitty_png_bytes(out, arbiter, inner, &png, image_id)
 }
 
 /// Drop a previously placed Kitty image by id (quiet).
@@ -1185,32 +1301,6 @@ mod tests {
     }
 
     #[test]
-    fn kitty_swap_does_not_blank_upload_id_first() {
-        unsafe {
-            std::env::set_var("TERM", "xterm-kitty");
-            std::env::set_var("TERM_PROGRAM", "kitty");
-        }
-        let mut arbiter = GraphicsArbiter::default();
-        let inner = Rect {
-            x: 2,
-            y: 2,
-            width: 8,
-            height: 4,
-        };
-        let rgb = vec![0x20_u8; 8 * 4 * 3];
-        let mut out = Vec::new();
-        paint_kitty_rgb_swap(&mut out, &mut arbiter, inner, &rgb, 8, 4, 42, Some(41)).unwrap();
-        let text = String::from_utf8_lossy(&out);
-        let transmit = text.find("a=T,").expect("transmit");
-        let retire = text.find("a=d,d=i,i=41").expect("retire old front");
-        assert!(
-            !text[..transmit].contains("a=d,d=i,i=42"),
-            "must not delete the upload id before transmit"
-        );
-        assert!(retire > transmit, "retire after transmit+placeholders");
-    }
-
-    #[test]
     fn kitty_rgb_paint_encodes_png_f100() {
         // SAFETY: test-only env mutation for graphics probe.
         unsafe {
@@ -1271,8 +1361,7 @@ mod tests {
             child: None,
             revision: 1,
             painted_revision: 0,
-            kitty_front: 22,
-            kitty_back: 23,
+            kitty_id: 1,
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,
@@ -1288,6 +1377,9 @@ mod tests {
                 coord_height: 874,
                 target: "posit".into(),
             },
+            cached_png: None,
+            placed_size: None,
+            kitty_resident: false,
             drag_origin: None,
             last_cell: None,
             pressed_action: false,
@@ -1508,8 +1600,7 @@ exit 0
             child: None,
             revision: 1,
             painted_revision: 0,
-            kitty_front: kitty_pair_for_kind(kind).0,
-            kitty_back: kitty_pair_for_kind(kind).1,
+            kitty_id: 1,
             last_mtime: None,
             last_poll: Instant::now(),
             last_geom: None,
@@ -1519,9 +1610,37 @@ exit 0
                 target: target.into(),
                 ..FrameMeta::default()
             },
+            cached_png: None,
+            placed_size: None,
+            kitty_resident: false,
             drag_origin: None,
             last_cell: None,
             pressed_action: false,
         }
+    }
+
+    #[test]
+    fn frame_cache_roundtrips_png_for_instant_reuse() {
+        let mut cache = FrameCache::default();
+        let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        cache.insert(
+            "browser",
+            "https://example.com",
+            png.clone(),
+            FrameMeta {
+                kind: "browser".into(),
+                image_width: 100,
+                image_height: 80,
+                ..FrameMeta::default()
+            },
+        );
+        let (got, meta) = cache.get("browser", "https://example.com").unwrap();
+        assert_eq!(got, png);
+        assert_eq!(meta.image_width, 100);
+        let mut surface = blank_surface("browser", "https://example.com", Path::new("/tmp"));
+        surface.cached_png = Some(png);
+        surface.revision = 1;
+        surface.store_in_cache(&mut cache);
+        assert!(cache.get("browser", "https://example.com").is_some());
     }
 }

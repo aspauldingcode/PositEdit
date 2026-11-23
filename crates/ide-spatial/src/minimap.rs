@@ -55,7 +55,6 @@ impl MinimapCache {
     }
 
     /// `samples[i]` is the representative glyph for source line `i` (0-based).
-    #[allow(clippy::too_many_arguments)]
     pub fn render_sampled(
         &mut self,
         revision: u64,
@@ -102,7 +101,7 @@ fn build_from_samples(
     samples: &[char],
     priority: MinimapPriority,
 ) -> Vec<MinimapCell> {
-    let rows = line_count.clamp(1, 256);
+    let rows = line_count.max(1).min(256);
     (0..rows)
         .map(|row| {
             let src = MinimapCache::line_for_row(line_count, rows, row);

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Posit Edit
+GenericName=Terminal IDE
+Comment=Minimal terminal IDE (posit-edit / pst)
+Exec=posit-edit %F
+TryExec=posit-edit
+Icon=posit-edit
+Terminal=true
+Categories=Development;TextEditor;IDE;
+MimeType=text/plain;text/x-csrc;text/x-c++src;text/x-python;text/x-rust;text/javascript;application/json;
+Keywords=editor;ide;tui;terminal;posit;
+StartupNotify=false

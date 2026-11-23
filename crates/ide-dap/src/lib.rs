@@ -112,6 +112,45 @@ impl DapSession {
         Ok(self.request("stepBack", json!({})))
     }
 
+    pub fn set_breakpoints(
+        &mut self,
+        source_path: &str,
+        lines: &[u32],
+    ) -> Result<String, DapError> {
+        if !matches!(
+            self.state,
+            DapState::Initialized | DapState::Configured | DapState::Running | DapState::Stopped
+        ) {
+            return Err(DapError::WrongState);
+        }
+        let breakpoints: Vec<Value> = lines
+            .iter()
+            .map(|line| json!({"line": line}))
+            .collect();
+        Ok(self.request(
+            "setBreakpoints",
+            json!({
+                "source": {"path": source_path},
+                "breakpoints": breakpoints
+            }),
+        ))
+    }
+
+    pub fn stack_trace(&mut self, thread_id: i64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        Ok(self.request("stackTrace", json!({ "threadId": thread_id })))
+    }
+
+    pub fn continue_exec(&mut self, thread_id: i64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        self.state = DapState::Running;
+        Ok(self.request("continue", json!({ "threadId": thread_id })))
+    }
+
     pub fn capabilities(&self) -> &DapCapabilities {
         &self.capabilities
     }
@@ -241,6 +280,26 @@ mod tests {
             .push_adapter(r#"{"seq":3,"type":"event","event":"terminated"}"#)
             .unwrap();
         assert_eq!(session.state(), DapState::Exited);
+    }
+
+    #[test]
+    fn breakpoints_and_continue_from_stopped() {
+        let mut session = DapSession::new();
+        session.initialize().unwrap();
+        session
+            .push_adapter(r#"{"seq":1,"type":"response","command":"initialize","success":true,"body":{}}"#)
+            .unwrap();
+        let bp = session.set_breakpoints("main.rs", &[3, 9]).unwrap();
+        assert!(bp.contains("setBreakpoints"));
+        session.launch("./app").unwrap();
+        session
+            .push_adapter(
+                r#"{"seq":2,"type":"event","event":"stopped","body":{"reason":"breakpoint","threadId":1}}"#,
+            )
+            .unwrap();
+        assert!(session.stack_trace(1).unwrap().contains("stackTrace"));
+        session.continue_exec(1).unwrap();
+        assert_eq!(session.state(), DapState::Running);
     }
 
     #[test]

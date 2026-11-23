@@ -54,6 +54,7 @@ fn formatters_for(language: &str) -> Vec<Formatter> {
             args: &["fmt"],
             extension: "zig",
         }],
+        // Prefer official nixfmt only — do not fall back to alejandra/nixpkgs-fmt.
         "nix" => vec![
             Formatter {
                 program: "nixfmt",
@@ -62,17 +63,6 @@ fn formatters_for(language: &str) -> Vec<Formatter> {
             },
             Formatter {
                 program: "nixfmt-rfc-style",
-                args: &[],
-                extension: "nix",
-            },
-            // Common on Nix/home-manager hosts when classic nixfmt is absent.
-            Formatter {
-                program: "alejandra",
-                args: &["-q"],
-                extension: "nix",
-            },
-            Formatter {
-                program: "nixpkgs-fmt",
                 args: &[],
                 extension: "nix",
             },

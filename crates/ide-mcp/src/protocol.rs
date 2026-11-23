@@ -13,7 +13,6 @@ pub const CONTROL_TOOLS: &[&str] = &[
     "posit_key",
     "posit_command",
     "posit_runtime",
-    "posit_pointer",
     "posit_capture",
 ];
 
@@ -52,22 +51,6 @@ pub struct StatusInfo {
     pub runtime_dock: Option<String>,
     pub width: u16,
     pub height: u16,
-    /// Absolute vs hybrid relative line numbers in the editor gutter.
-    #[serde(default)]
-    pub relative_numbers: bool,
-    /// Focused-editor minimap preference (`:minimap`).
-    #[serde(default = "default_true")]
-    pub minimap_on: bool,
-    /// Canvas hold (`:freeze`) — last frame kept, uploads paused.
-    #[serde(default)]
-    pub canvas_frozen: bool,
-    /// Live Unix control socket path (empty if unknown).
-    #[serde(default)]
-    pub control_socket: String,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

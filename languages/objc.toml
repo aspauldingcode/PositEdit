@@ -1,0 +1,8 @@
+# Objective-C / Objective-C++. clangd covers both .m and .mm.
+id = "objc"
+extensions = ["m", "mm"]
+server = "clangd"
+formatter = "clang-format"
+build = "clang"
+test = "xcodebuild"
+debugger = "lldb"

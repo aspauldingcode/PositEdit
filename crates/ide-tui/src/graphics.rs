@@ -1,6 +1,19 @@
 //! Host-owned graphics arbiter. Only the host terminal writer emits escapes.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// User setting: when false, force text fallbacks even on Kitty/Ghostty hosts.
+static KITTY_ALLOWED: AtomicBool = AtomicBool::new(true);
+
+/// Enable/disable Kitty protocol paths (settings toggle + tests).
+pub fn set_kitty_allowed(allowed: bool) {
+    KITTY_ALLOWED.store(allowed, Ordering::Relaxed);
+}
+
+pub fn kitty_allowed() -> bool {
+    KITTY_ALLOWED.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GraphicsBackend {
@@ -38,6 +51,9 @@ pub struct GraphicsArbiter {
 
 impl GraphicsArbiter {
     pub fn probe_env(term: Option<&str>, term_program: Option<&str>) -> GraphicsBackend {
+        if !kitty_allowed() {
+            return GraphicsBackend::Text;
+        }
         let term = term.unwrap_or("").to_ascii_lowercase();
         let program = term_program.unwrap_or("").to_ascii_lowercase();
         // Ghostty speaks the Kitty graphics protocol for the dedicated Canvas.
@@ -63,6 +79,11 @@ impl GraphicsArbiter {
             std::env::var("TERM").ok().as_deref(),
             std::env::var("TERM_PROGRAM").ok().as_deref(),
         );
+        if !kitty_allowed() {
+            self.backend = GraphicsBackend::Text;
+            self.probed = true;
+            return;
+        }
         if self.probed {
             // Allow Text → Kitty upgrade (nested launch / late env), never downgrade.
             if self.backend == GraphicsBackend::Text && env == GraphicsBackend::Kitty {
@@ -76,11 +97,19 @@ impl GraphicsArbiter {
 
     pub fn backend(&mut self) -> GraphicsBackend {
         self.ensure_probed();
+        if !kitty_allowed() {
+            return GraphicsBackend::Text;
+        }
         self.backend
     }
 
     /// Force Kitty when the host speaks the protocol (minimap/Canvas share this).
     pub fn prefer_kitty_from_env(&mut self) {
+        if !kitty_allowed() {
+            self.backend = GraphicsBackend::Text;
+            self.probed = true;
+            return;
+        }
         self.ensure_probed();
         if Self::probe_env(
             std::env::var("TERM").ok().as_deref(),
@@ -89,6 +118,12 @@ impl GraphicsArbiter {
         {
             self.backend = GraphicsBackend::Kitty;
         }
+    }
+
+    /// Re-apply after the settings toggle changes.
+    pub fn refresh_kitty_policy(&mut self) {
+        self.probed = false;
+        self.ensure_probed();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -181,6 +216,7 @@ mod tests {
 
     #[test]
     fn probe_and_cleanup() {
+        set_kitty_allowed(true);
         assert_eq!(
             GraphicsArbiter::probe_env(Some("xterm-kitty"), Some("kitty")),
             GraphicsBackend::Kitty
@@ -193,6 +229,13 @@ mod tests {
             GraphicsArbiter::probe_env(Some("xterm-256color"), Some("Apple_Terminal")),
             GraphicsBackend::Text
         );
+        set_kitty_allowed(false);
+        assert_eq!(
+            GraphicsArbiter::probe_env(Some("xterm-kitty"), Some("kitty")),
+            GraphicsBackend::Text,
+            "settings toggle forces text fallback"
+        );
+        set_kitty_allowed(true);
         let mut arbiter = GraphicsArbiter::default();
         arbiter.backend = GraphicsBackend::Text;
         arbiter.probed = true;

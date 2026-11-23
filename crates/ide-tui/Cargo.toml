@@ -11,8 +11,10 @@ ide-ai = { path = "../ide-ai" }
 ide-core = { path = "../ide-core" }
 ide-mcp = { path = "../ide-mcp" }
 ide-navigation = { path = "../ide-navigation" }
+ide-packages = { path = "../ide-packages" }
 ide-spatial = { path = "../ide-spatial" }
 ide-syntax = { path = "../ide-syntax" }
+ide-lsp = { path = "../ide-lsp" }
 ratatui.workspace = true
 crossterm.workspace = true
 serde = { workspace = true, features = ["derive"] }

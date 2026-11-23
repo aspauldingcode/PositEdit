@@ -7,6 +7,7 @@ pub fn highlight(language: &str, text: &str) -> Option<Vec<Span>> {
         "shell" => Some(shell(text)),
         "markdown" => Some(markdown(text)),
         "toml" => Some(toml(text)),
+        "ini" => Some(ini(text)),
         "json" => Some(json(text)),
         "bend" => Some(bend(text)),
         _ => None,
@@ -33,6 +34,7 @@ pub fn language_for_path(path: &std::path::Path) -> Option<&'static str> {
         Some("sh" | "bash" | "zsh") => Some("shell"),
         Some("md" | "markdown") => Some("markdown"),
         Some("toml") => Some("toml"),
+        Some("ini" | "cfg" | "conf") => Some("ini"),
         Some("json") => Some("json"),
         Some("bend") => Some("bend"),
         _ => None,
@@ -99,6 +101,44 @@ fn toml(text: &str) -> Vec<Span> {
     spans
 }
 
+fn ini(text: &str) -> Vec<Span> {
+    let mut spans = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b';' | b'#' => {
+                let end = line_end(text, i);
+                push(&mut spans, i, end, TokenKind::Comment);
+                i = end;
+            }
+            b'[' => {
+                let end = text[i..]
+                    .find(']')
+                    .map(|at| i + at + 1)
+                    .unwrap_or(line_end(text, i));
+                push(&mut spans, i, end, TokenKind::Keyword);
+                i = end;
+            }
+            b'"' | b'\'' => i = string_span(text, i, &mut spans),
+            ch if ch.is_ascii_alphabetic() || ch == b'_' => {
+                let end = word_end(text, i);
+                if next_non_space(text, end) == Some(b'=') {
+                    push(&mut spans, i, end, TokenKind::Function);
+                }
+                i = end;
+            }
+            ch if ch.is_ascii_digit() => {
+                let end = number_end(text, i);
+                push(&mut spans, i, end, TokenKind::Type);
+                i = end;
+            }
+            _ => i = bump(text, i),
+        }
+    }
+    spans
+}
+
 fn json(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     let bytes = text.as_bytes();
@@ -143,54 +183,178 @@ fn markdown(text: &str) -> Vec<Span> {
     for line in text.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
         let start = offset;
+        let trimmed = body.trim_start();
+        let indent = body.len() - trimmed.len();
         if body.starts_with("```") || body.starts_with("~~~") {
-            push(&mut spans, start, start + body.len(), TokenKind::Keyword);
+            push(&mut spans, start, start + body.len(), TokenKind::Markup);
             fenced = !fenced;
         } else if fenced {
             push(&mut spans, start, start + body.len(), TokenKind::String);
-        } else if let Some(rest) = body.strip_prefix('#') {
-            let marks = 1 + rest.chars().take_while(|ch| *ch == '#').count();
+        } else if trimmed.starts_with('#') {
+            let marks = trimmed.chars().take_while(|ch| *ch == '#').count();
+            let mark_end = start + indent + marks;
+            push(&mut spans, start + indent, mark_end.min(start + body.len()), TokenKind::Markup);
+            if mark_end < start + body.len() {
+                // Prefer heading style on the title text after `#`.
+                let title_start = mark_end;
+                // Still honor inline bold/italic inside headings.
+                inline_markdown(&mut spans, &body[indent + marks..], title_start, true);
+            }
+        } else if trimmed.starts_with('>') {
+            push(&mut spans, start, start + body.len(), TokenKind::Comment);
+        } else if is_table_row(trimmed) {
+            table_row(&mut spans, body, start);
+        } else if trimmed
+            .chars()
+            .all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+            && trimmed.chars().filter(|ch| matches!(ch, '-' | '*' | '_')).count() >= 3
+        {
+            push(&mut spans, start, start + body.len(), TokenKind::Markup);
+        } else if let Some(rest) = list_marker(trimmed) {
+            let marker_len = trimmed.len() - rest.len();
             push(
                 &mut spans,
-                start,
-                start + marks.min(body.len()),
+                start + indent,
+                start + indent + marker_len,
                 TokenKind::Keyword,
             );
-            if marks < body.len() {
-                push(
-                    &mut spans,
-                    start + marks,
-                    start + body.len(),
-                    TokenKind::Function,
-                );
-            }
-        } else if body.starts_with('>') {
-            push(&mut spans, start, start + body.len(), TokenKind::Comment);
+            inline_markdown(
+                &mut spans,
+                rest,
+                start + indent + marker_len,
+                false,
+            );
         } else {
-            inline_markdown(&mut spans, body, start);
+            inline_markdown(&mut spans, body, start, false);
         }
         offset += line.len();
     }
     spans
 }
 
-fn inline_markdown(spans: &mut Vec<Span>, line: &str, base: usize) {
+fn is_table_row(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.matches('|').count() >= 2
+}
+
+fn list_marker(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    if matches!(bytes[0], b'-' | b'*' | b'+') && bytes.get(1) == Some(&b' ') {
+        return Some(&line[2..]);
+    }
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && bytes.get(i) == Some(&b'.') && bytes.get(i + 1) == Some(&b' ') {
+        return Some(&line[i + 2..]);
+    }
+    None
+}
+
+fn table_row(spans: &mut Vec<Span>, line: &str, base: usize) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'|' {
+            push(spans, base + i, base + i + 1, TokenKind::Markup);
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'-' || bytes[i] == b':' {
+            let start = i;
+            while i < bytes.len() && matches!(bytes[i], b'-' | b':' | b' ') {
+                i += 1;
+            }
+            push(spans, base + start, base + i, TokenKind::Markup);
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'|' {
+            i += 1;
+        }
+        if i > start {
+            push(spans, base + start, base + i, TokenKind::Table);
+        }
+    }
+}
+
+fn inline_markdown(spans: &mut Vec<Span>, line: &str, base: usize, heading: bool) {
     let bytes = line.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'`' {
             if let Some(end) = line[i + 1..].find('`') {
-                push(spans, base + i, base + i + end + 2, TokenKind::String);
+                push(spans, base + i, base + i + 1, TokenKind::Markup);
+                push(
+                    spans,
+                    base + i + 1,
+                    base + i + 1 + end,
+                    TokenKind::String,
+                );
+                push(
+                    spans,
+                    base + i + 1 + end,
+                    base + i + end + 2,
+                    TokenKind::Markup,
+                );
                 i += end + 2;
                 continue;
             }
         }
         if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
             if let Some(end) = line[i + 2..].find("**") {
-                push(spans, base + i, base + i + end + 4, TokenKind::Function);
+                push(spans, base + i, base + i + 2, TokenKind::Markup);
+                push(
+                    spans,
+                    base + i + 2,
+                    base + i + 2 + end,
+                    if heading {
+                        TokenKind::Heading
+                    } else {
+                        TokenKind::Bold
+                    },
+                );
+                push(
+                    spans,
+                    base + i + 2 + end,
+                    base + i + end + 4,
+                    TokenKind::Markup,
+                );
                 i += end + 4;
                 continue;
             }
+        }
+        if bytes[i] == b'*' || bytes[i] == b'_' {
+            let delim = bytes[i];
+            if let Some(rel) = line[i + 1..].find(delim as char) {
+                let end = i + 1 + rel;
+                // Avoid treating `*` list leftovers or empty emphasis.
+                if end > i + 1 && !line[i + 1..end].contains('\n') {
+                    push(spans, base + i, base + i + 1, TokenKind::Markup);
+                    push(spans, base + i + 1, base + end, TokenKind::Italic);
+                    push(spans, base + end, base + end + 1, TokenKind::Markup);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        if heading {
+            let start = i;
+            while i < bytes.len()
+                && bytes[i] != b'*'
+                && bytes[i] != b'_'
+                && bytes[i] != b'`'
+            {
+                i += 1;
+            }
+            if i > start {
+                push(spans, base + start, base + i, TokenKind::Heading);
+            }
+            continue;
         }
         i = bump(line, i);
     }

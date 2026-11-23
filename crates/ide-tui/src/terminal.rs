@@ -832,6 +832,20 @@ impl Panel {
         (width.saturating_sub(side).max(1), side)
     }
 
+    /// Panel-local column of the session-list divider, when visible.
+    pub fn side_divider_x(&self, width: u16) -> Option<u16> {
+        if !self.open || self.show_console {
+            return None;
+        }
+        let inner_w = width.saturating_sub(2).max(1);
+        let (body, side) = self.split_width(inner_w);
+        if side == 0 {
+            return None;
+        }
+        let body = body.saturating_sub(1);
+        Some(body.saturating_add(1)) // panel-local column of │
+    }
+
     /// Panel-local hit on the session-list divider (resize handle).
     pub fn on_side_seam(&self, local_x: u16, local_y: u16, width: u16, height: u16) -> bool {
         if height <= 2 || !self.open || self.show_console {
@@ -840,14 +854,10 @@ impl Panel {
         if local_y == 0 || local_y + 1 >= height {
             return false;
         }
-        let inner_w = width.saturating_sub(2).max(1);
-        let (body, side) = self.split_width(inner_w);
-        if side == 0 {
+        let Some(divider) = self.side_divider_x(width) else {
             return false;
-        }
-        let body = body.saturating_sub(1);
-        // Exact divider column only — never steal the last PTY body cell.
-        let divider = body.saturating_add(1); // panel-local column of │
+        };
+        // Exact divider column only — never steal a PTY body cell.
         local_x == divider
     }
 
@@ -886,11 +896,14 @@ impl Panel {
         self.show_console = true;
         self.open = true;
         self.console_scroll = self.console.len().saturating_sub(1);
+        // Fresh log output replaces any prior PTY selection.
+        self.clear_selection();
     }
 
     pub fn toggle_console(&mut self) {
         self.show_console = !self.show_console;
         self.open = true;
+        self.clear_selection();
     }
 
     pub fn focus_runtime(&mut self, runtime_id: &str) -> bool {
@@ -997,10 +1010,13 @@ impl Panel {
         self.select_by = SelectBy::Char;
     }
 
-    /// Selected text from the focused session grid, same shape as buffer yank.
+    /// Selected text from the console log or focused session grid.
     pub fn selected_text(&self) -> Option<String> {
         if !self.has_selection() {
             return None;
+        }
+        if self.show_console {
+            return self.console_selected_text();
         }
         let (start, end) = self.selection_range()?;
         let session = self.sessions.get(self.focus.min(self.sessions.len().saturating_sub(1)))?;
@@ -1029,6 +1045,22 @@ impl Panel {
     }
 
     pub fn select_all_visible(&mut self) {
+        if self.show_console {
+            if self.console.is_empty() {
+                return;
+            }
+            let last_row = (self.console.len() - 1) as u16;
+            let last_col = self
+                .console
+                .last()
+                .map(|line| line.chars().count().saturating_sub(1))
+                .unwrap_or(0) as u16;
+            self.select_anchor = Some((0, 0));
+            self.select_end = Some((last_col, last_row));
+            self.select_by = SelectBy::Line;
+            self.focused = true;
+            return;
+        }
         let Some(session) = self.sessions.get(self.focus.min(self.sessions.len().saturating_sub(1)))
         else {
             return;
@@ -1039,6 +1071,72 @@ impl Panel {
         self.select_end = Some((cols.saturating_sub(1), rows.saturating_sub(1)));
         self.select_by = SelectBy::Line;
         self.focused = true;
+    }
+
+    fn console_selected_text(&self) -> Option<String> {
+        let (ax, ay) = self.select_anchor?;
+        let (bx, by) = self.select_end?;
+        let (start, end) = if (ay, ax) <= (by, bx) {
+            ((ay as usize, ax as usize), (by as usize, bx as usize))
+        } else {
+            ((by as usize, bx as usize), (ay as usize, ax as usize))
+        };
+        if self.console.is_empty() || start.0 >= self.console.len() {
+            return None;
+        }
+        let end_line = end.0.min(self.console.len() - 1);
+        let mut out = String::new();
+        for line_i in start.0..=end_line {
+            let chars: Vec<char> = self.console[line_i].chars().collect();
+            let piece: String = if start.0 == end_line {
+                let from = start.1.min(chars.len());
+                let to = (end.1 + 1).min(chars.len());
+                chars[from..to].iter().collect()
+            } else if line_i == start.0 {
+                let from = start.1.min(chars.len());
+                chars[from..].iter().collect()
+            } else if line_i == end_line {
+                let to = (end.1 + 1).min(chars.len());
+                chars[..to].iter().collect()
+            } else {
+                self.console[line_i].clone()
+            };
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(piece.trim_end());
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
+    fn console_cell_selected(&self, col: usize, line: usize) -> bool {
+        let Some((ax, ay)) = self.select_anchor else {
+            return false;
+        };
+        let Some((bx, by)) = self.select_end else {
+            return false;
+        };
+        if !self.has_selection() {
+            return false;
+        }
+        let (start, end) = if (ay, ax) <= (by, bx) {
+            ((ay as usize, ax as usize), (by as usize, bx as usize))
+        } else {
+            ((by as usize, bx as usize), (ay as usize, ax as usize))
+        };
+        if line < start.0 || line > end.0 {
+            return false;
+        }
+        if start.0 == end.0 {
+            return col >= start.1 && col <= end.1;
+        }
+        if line == start.0 {
+            return col >= start.1;
+        }
+        if line == end.0 {
+            return col <= end.1;
+        }
+        true
     }
 
     fn selection_range(&self) -> Option<(usize, usize)> {
@@ -1065,7 +1163,7 @@ impl Panel {
         index >= start && index < end
     }
 
-    /// Pointer in the PTY body. Click/drag selects like a text buffer.
+    /// Pointer in the PTY or console body. Click/drag selects like a text buffer.
     pub fn body_pointer(
         &mut self,
         local_x: u16,
@@ -1075,10 +1173,16 @@ impl Panel {
         drag: bool,
         click_count: u8,
     ) -> bool {
-        if height <= 1 || !self.open || self.show_console || self.sessions.is_empty() {
+        if height <= 1 || !self.open {
             return false;
         }
         if local_x == 0 || local_y == 0 || local_x + 1 >= width || local_y + 1 >= height {
+            return false;
+        }
+        if self.show_console {
+            return self.console_pointer(local_x, local_y, width, height, drag, click_count);
+        }
+        if self.sessions.is_empty() {
             return false;
         }
         let inner_x = local_x.saturating_sub(1);
@@ -1127,6 +1231,140 @@ impl Panel {
             }
         }
         true
+    }
+
+    fn console_pointer(
+        &mut self,
+        local_x: u16,
+        local_y: u16,
+        _width: u16,
+        height: u16,
+        drag: bool,
+        click_count: u8,
+    ) -> bool {
+        if self.console.is_empty() {
+            return false;
+        }
+        let inner_x = local_x.saturating_sub(1);
+        let inner_y = local_y.saturating_sub(1);
+        let inner_h = height.saturating_sub(2).max(1) as usize;
+        let start = self
+            .console_scroll
+            .saturating_sub(inner_h.saturating_sub(1));
+        let line_idx = (start + inner_y as usize).min(self.console.len() - 1);
+        let chars: Vec<char> = self.console[line_idx].chars().collect();
+        let col = if chars.is_empty() {
+            0
+        } else {
+            (inner_x as usize).min(chars.len() - 1) as u16
+        };
+        let row = line_idx as u16;
+        if drag {
+            self.focused = false;
+            match self.select_by {
+                SelectBy::Char => self.select_end = Some((col, row)),
+                SelectBy::Word => self.extend_console_word(col, row),
+                SelectBy::Line => self.extend_console_line(row),
+            }
+            return true;
+        }
+        self.select_by = match click_count {
+            2 => SelectBy::Word,
+            3 => SelectBy::Line,
+            _ => SelectBy::Char,
+        };
+        match self.select_by {
+            SelectBy::Char => {
+                self.select_anchor = Some((col, row));
+                self.select_end = Some((col, row));
+                self.focused = true;
+            }
+            SelectBy::Word => {
+                self.select_console_word(col, row);
+                self.focused = false;
+            }
+            SelectBy::Line => {
+                self.select_console_line(row);
+                self.focused = false;
+            }
+        }
+        true
+    }
+
+    fn select_console_word(&mut self, col: u16, row: u16) {
+        let Some((start, end)) = self.console_word_bounds(col, row) else {
+            self.select_anchor = Some((col, row));
+            self.select_end = Some((col, row));
+            return;
+        };
+        self.select_anchor = Some((start, row));
+        self.select_end = Some((end, row));
+    }
+
+    fn extend_console_word(&mut self, col: u16, row: u16) {
+        let Some((anchor_col, anchor_row)) = self.select_anchor else {
+            self.select_console_word(col, row);
+            return;
+        };
+        let Some((start, end)) = self.console_word_bounds(col, row) else {
+            self.select_end = Some((col, row));
+            return;
+        };
+        if (row, col) < (anchor_row, anchor_col) {
+            self.select_end = Some((start, row));
+        } else {
+            self.select_end = Some((end, row));
+        }
+    }
+
+    fn select_console_line(&mut self, row: u16) {
+        let idx = (row as usize).min(self.console.len().saturating_sub(1));
+        let last = self
+            .console
+            .get(idx)
+            .map(|line| line.chars().count().saturating_sub(1))
+            .unwrap_or(0) as u16;
+        self.select_anchor = Some((0, row));
+        self.select_end = Some((last, row));
+        self.select_by = SelectBy::Line;
+    }
+
+    fn extend_console_line(&mut self, row: u16) {
+        let Some((_, anchor_row)) = self.select_anchor else {
+            self.select_console_line(row);
+            return;
+        };
+        let top = row.min(anchor_row);
+        let bottom = row.max(anchor_row);
+        let last = self
+            .console
+            .get(bottom as usize)
+            .map(|line| line.chars().count().saturating_sub(1))
+            .unwrap_or(0) as u16;
+        self.select_anchor = Some((0, top));
+        self.select_end = Some((last, bottom));
+    }
+
+    fn console_word_bounds(&self, col: u16, row: u16) -> Option<(u16, u16)> {
+        let line = self.console.get(row as usize)?;
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+        let col = (col as usize).min(chars.len() - 1);
+        let is_word = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '.';
+        if !is_word(chars[col]) {
+            return Some((col as u16, col as u16));
+        }
+        let mut start = col;
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < chars.len() && is_word(chars[end + 1]) {
+            end += 1;
+        }
+        Some((start as u16, end as u16))
     }
 
     fn select_word(&mut self, col: u16, row: u16) {
@@ -1577,7 +1815,7 @@ impl Panel {
         let mut lines = Vec::with_capacity(rows);
         let message = self.spawn_error.clone().unwrap_or_else(|| {
             if self.sessions.is_empty() {
-                "no terminal yet — press + (or click +) to open a shell".to_string()
+                "no terminal yet. press + to add one".to_string()
             } else {
                 String::new()
             }
@@ -1597,16 +1835,64 @@ impl Panel {
 
     fn console_paragraph(&self, width: u16, height: u16) -> Paragraph<'static> {
         let visible = height.max(1) as usize;
+        let width = width.max(1) as usize;
         let start = self
             .console_scroll
             .saturating_sub(visible.saturating_sub(1));
         let mut lines = Vec::new();
         if self.console.is_empty() {
-            lines.push(Line::from("workbench output — b builds · r runs · ff formats"));
+            lines.push(Line::from("workbench output appears here"));
         } else {
-            for line in self.console.iter().skip(start).take(visible) {
-                let clipped: String = line.chars().take(width as usize).collect();
-                lines.push(Line::from(clipped));
+            for (vis, line) in self.console.iter().skip(start).take(visible).enumerate() {
+                let line_idx = start + vis;
+                let chars: Vec<char> = line.chars().take(width).collect();
+                if !self.has_selection() {
+                    let clipped: String = chars.into_iter().collect();
+                    lines.push(Line::from(clipped));
+                    continue;
+                }
+                let mut spans = Vec::new();
+                let mut run = String::new();
+                let mut run_sel = false;
+                let flush = |run: &mut String, run_sel: bool, spans: &mut Vec<Span<'static>>| {
+                    if run.is_empty() {
+                        return;
+                    }
+                    let style = if run_sel {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    spans.push(Span::styled(std::mem::take(run), style));
+                };
+                for (col, ch) in chars.iter().enumerate() {
+                    let sel = self.console_cell_selected(col, line_idx);
+                    if !run.is_empty() && sel != run_sel {
+                        flush(&mut run, run_sel, &mut spans);
+                    }
+                    run_sel = sel;
+                    run.push(*ch);
+                }
+                flush(&mut run, run_sel, &mut spans);
+                let shown = spans
+                    .iter()
+                    .map(|span| span.content.chars().count())
+                    .sum::<usize>();
+                if shown < width {
+                    let pad_sel = self.has_selection()
+                        && (shown..width).any(|col| self.console_cell_selected(col, line_idx));
+                    let style = if pad_sel {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    spans.push(Span::styled(" ".repeat(width - shown), style));
+                }
+                if spans.is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    lines.push(Line::from(spans));
+                }
             }
         }
         while lines.len() < visible {
@@ -1696,7 +1982,7 @@ fn session_room(height: u16) -> usize {
 }
 
 fn collapsed_line(width: u16) -> Line<'static> {
-    let mut text = format!("{:width$}", "t  terminal · press t", width = width as usize);
+    let mut text = format!("{:width$}", "t  terminal", width = width as usize);
     if text.chars().count() > width as usize {
         text = text.chars().take(width as usize).collect();
     }
@@ -1930,6 +2216,26 @@ mod tests {
         assert!(panel.body_pointer(1, 1, 40, 8, false, 2));
         let word = panel.selected_text().expect("word");
         assert!(word.contains("hello"), "{word}");
+    }
+
+    #[test]
+    fn console_drag_and_select_all_yank_workbench_logs() {
+        let mut panel = Panel::new();
+        panel.append_console("*workbench*", "alpha line\nbeta line\ngamma");
+        assert!(panel.show_console);
+        // Frame inset: local (1,2) is the first content line under the stamp.
+        assert!(panel.body_pointer(1, 2, 40, 8, false, 1));
+        assert!(!panel.has_selection());
+        assert!(panel.body_pointer(10, 2, 40, 8, true, 1));
+        assert!(panel.has_selection());
+        let drag = panel.selected_text().expect("drag");
+        assert!(drag.contains("alpha"), "{drag}");
+        panel.select_all_visible();
+        let all = panel.selected_text().expect("select all");
+        assert!(all.contains("alpha line"), "{all}");
+        assert!(all.contains("beta line"), "{all}");
+        assert!(all.contains("gamma"), "{all}");
+        assert!(all.contains("*workbench*") || all.contains("──"), "{all}");
     }
 
     #[test]

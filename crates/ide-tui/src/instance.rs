@@ -45,8 +45,7 @@ pub fn acquire() -> io::Result<InstanceGuard> {
         if rc != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "Posit Edit is already running. Only one session is allowed. \
-                 Quit the other window, or set POSIT_EDIT_INSTANCE_LOCK to a fresh path.",
+                "Posit Edit is already running. Only one session is allowed.",
             ));
         }
         let _ = writeln!(file, "{}", std::process::id());

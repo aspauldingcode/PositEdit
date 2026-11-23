@@ -1,4 +1,4 @@
-//! Workspace tree and the floating Open browser (plus optional external yazi).
+//! Workspace tree and the Yazi chooser used to open or create files.
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, ErrorKind};

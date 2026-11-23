@@ -298,11 +298,13 @@ dependencies = [
 name = "ide-syntax"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-kotlin-ng",
+ "tree-sitter-language",
  "tree-sitter-nix",
  "tree-sitter-objc",
  "tree-sitter-python",
@@ -325,8 +327,10 @@ dependencies = [
  "ide-core",
  "ide-dlc-ui",
  "ide-local-tab-ui",
+ "ide-lsp",
  "ide-mcp",
  "ide-navigation",
+ "ide-packages",
  "ide-spatial",
  "ide-syntax",
  "libc",
@@ -393,6 +397,16 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
 
 [[package]]
 name = "linux-raw-sys"

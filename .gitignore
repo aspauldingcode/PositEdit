@@ -1,5 +1,7 @@
 /target
 /result
+/dist
+.tmp/
 *.log
 .DS_Store
 __pycache__/
@@ -12,3 +14,11 @@ engineering/evidence/runtime/
 .env
 .env.*
 !.env.example
+.posit/
+# Runtime vendor binaries are large (Electron / phone runtime); source forks stay tracked.
+/vendor/dist/
+/vendor/bin/
+/vendor/terminal-browser/node_modules/
+/vendor/terminal-browser/**/node_modules/
+/vendor/terminal-phone/.build/
+/vendor/terminal-phone/dist/

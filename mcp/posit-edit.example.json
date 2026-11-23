@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "posit-edit": {
+      "command": "REPLACE_WITH_REPO/target/debug/posit-edit-mcp",
+      "args": [],
+      "env": {
+        "POSIT_EDIT_CONTROL_SOCKET": "REPLACE_WITH_XDG_RUNTIME_OR_TEMP/posit-edit.control.sock"
+      }
+    }
+  }
+}

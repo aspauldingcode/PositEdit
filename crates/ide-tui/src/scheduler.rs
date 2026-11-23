@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 /// One frame's worth of user input after draining the tty queue.
 #[derive(Clone, Debug, Default)]
 pub struct InputBatch {
-    pub keys: Vec<(KeyCode, KeyModifiers)>,
+    /// Ordered keys with press / repeat / release kind (Kitty progressive enhancement).
+    pub keys: Vec<(KeyCode, KeyModifiers, KeyEventKind)>,
     pub toggle_tab: bool,
     /// Net vertical wheel ticks (negative = up / content moves down).
     pub scroll_v: i32,
@@ -31,6 +32,8 @@ pub struct InputBatch {
     pub moves: Option<(u16, u16)>,
     pub pointers: Vec<PointerOp>,
     pub resized: bool,
+    /// Terminal regained focus — re-probe OSC palette (theme may have changed).
+    pub focus_gained: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +53,7 @@ impl InputBatch {
             && self.moves.is_none()
             && self.pointers.is_empty()
             && !self.resized
+            && !self.focus_gained
     }
 
     pub fn wants_present(&self) -> bool {
@@ -63,18 +67,25 @@ pub fn coalesce(events: impl IntoIterator<Item = Event>) -> InputBatch {
     let mut batch = InputBatch::default();
     for event in events {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if key.code == KeyCode::Char('t')
+            Event::Key(key)
+                if matches!(
+                    key.kind,
+                    KeyEventKind::Press | KeyEventKind::Repeat | KeyEventKind::Release
+                ) =>
+            {
+                if key.kind != KeyEventKind::Release
+                    && key.code == KeyCode::Char('t')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                     && key.modifiers.contains(KeyModifiers::ALT)
                 {
                     batch.toggle_tab = true;
                 } else {
-                    batch.keys.push((key.code, key.modifiers));
+                    batch.keys.push((key.code, key.modifiers, key.kind));
                 }
             }
             Event::Mouse(mouse) => merge_mouse(&mut batch, mouse),
             Event::Resize(_, _) => batch.resized = true,
+            Event::FocusGained => batch.focus_gained = true,
             _ => {}
         }
     }
@@ -243,6 +254,7 @@ mod tests {
         assert_eq!(batch.scroll_v, 40);
         assert_eq!(batch.keys.len(), 1);
         assert_eq!(batch.keys[0].0, KeyCode::Char('q'));
+        assert_eq!(batch.keys[0].2, KeyEventKind::Press);
     }
 
     #[test]
@@ -252,7 +264,7 @@ mod tests {
             batch
                 .keys
                 .iter()
-                .map(|(c, _)| *c)
+                .map(|(c, _, _)| *c)
                 .collect::<Vec<_>>(),
             vec![
                 KeyCode::Char('a'),
@@ -260,6 +272,27 @@ mod tests {
                 KeyCode::Char('c')
             ]
         );
+    }
+
+    #[test]
+    fn key_release_is_kept_for_hold_gestures() {
+        let batch = coalesce([
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: crossterm::event::KeyEventState::empty(),
+            }),
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Release,
+                state: crossterm::event::KeyEventState::empty(),
+            }),
+        ]);
+        assert_eq!(batch.keys.len(), 2);
+        assert_eq!(batch.keys[0].2, KeyEventKind::Press);
+        assert_eq!(batch.keys[1].2, KeyEventKind::Release);
     }
 
     #[test]
