@@ -10116,19 +10116,35 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         return Ok(());
     }
     let (cell_w, cell_h) = canvas_cell_pixels(app);
+    // Shrink the Kitty scene under memory pressure so Flip stays usable on jetsam hosts.
+    let max_w = if app.last_pressure.is_critical() {
+        flip3d::SCENE_MAX_W / 2
+    } else if app.last_pressure.is_elevated() {
+        (flip3d::SCENE_MAX_W * 3) / 4
+    } else {
+        flip3d::SCENE_MAX_W
+    };
+    let max_h = if app.last_pressure.is_critical() {
+        flip3d::SCENE_MAX_H / 2
+    } else if app.last_pressure.is_elevated() {
+        (flip3d::SCENE_MAX_H * 3) / 4
+    } else {
+        flip3d::SCENE_MAX_H
+    };
     let img_w = (tiles.width as u32)
         .saturating_mul(cell_w.max(1))
-        .min(flip3d::SCENE_MAX_W);
+        .min(max_w.max(160));
     let img_h = (tiles.height as u32)
         .saturating_mul(cell_h.max(1))
-        .min(flip3d::SCENE_MAX_H);
+        .min(max_h.max(120));
     // Skip heavy scene rebuild while the stack is settled and unchanged.
     if !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001 {
         return Ok(());
     }
     let cards = app.flip_cards();
     let theme = app.flip_scene_theme();
-    let rgb = flip3d::render_scene_rgb(
+    let (enc_w, enc_h) = flip3d::render_scene_rgb_into(
+        &mut app.flip.scene_rgb,
         &cards,
         app.flip.scroll,
         app.flip.selected,
@@ -10136,11 +10152,14 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         img_h,
         theme,
     );
-    let enc_w = img_w.min(flip3d::SCENE_MAX_W);
-    let enc_h = img_h.min(flip3d::SCENE_MAX_H);
-    let Some(png) = canvas::encode_rgb_png(enc_w, enc_h, &rgb) else {
+    if !canvas::encode_rgb_png_into(
+        &mut app.flip.scene_png,
+        enc_w,
+        enc_h,
+        &app.flip.scene_rgb,
+    ) {
         return Ok(());
-    };
+    }
     let box_key = (tiles.x, tiles.y, tiles.width, tiles.height);
     let same_box = app.flip.placed == Some(box_key);
     // In-place replace: no delete flash, skip placeholder rewrite when box stable.
@@ -10148,7 +10167,7 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         &mut stdout(),
         &mut app.graphics,
         tiles,
-        &png,
+        &app.flip.scene_png,
         FLIP3D_KITTY_IMAGE_ID,
         !same_box,
         !same_box,

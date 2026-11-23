@@ -1108,13 +1108,22 @@ pub fn paint_kitty_png_bytes_opts(
 /// Encode tightly-packed RGB24 into a PNG (filter None, zlib stored blocks).
 /// Used for the editor Kitty minimap so Ghostty can use the same `f=100` path as Canvas.
 pub fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
-    if width == 0 || height == 0 {
+    let mut out = Vec::new();
+    if !encode_rgb_png_into(&mut out, width, height, rgb) {
         return None;
+    }
+    Some(out)
+}
+
+/// Like [`encode_rgb_png`] but reuses `out` (Flip animation — avoid per-frame alloc).
+pub fn encode_rgb_png_into(out: &mut Vec<u8>, width: u32, height: u32, rgb: &[u8]) -> bool {
+    if width == 0 || height == 0 {
+        return false;
     }
     let row_bytes = (width as usize).saturating_mul(3);
     let expected = row_bytes.saturating_mul(height as usize);
     if rgb.len() < expected {
-        return None;
+        return false;
     }
     let mut raw = Vec::with_capacity((row_bytes + 1).saturating_mul(height as usize));
     for y in 0..height as usize {
@@ -1123,9 +1132,10 @@ pub fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
         raw.extend_from_slice(&rgb[start..start + row_bytes]);
     }
     let zlib = zlib_store(&raw);
-    let mut out = Vec::with_capacity(zlib.len() + 256);
+    out.clear();
+    out.reserve(zlib.len() + 256);
     out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-    write_png_chunk(&mut out, b"IHDR", &{
+    write_png_chunk(out, b"IHDR", &{
         let mut ihdr = [0u8; 13];
         ihdr[0..4].copy_from_slice(&width.to_be_bytes());
         ihdr[4..8].copy_from_slice(&height.to_be_bytes());
@@ -1133,9 +1143,9 @@ pub fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
         ihdr[9] = 2; // truecolor RGB
         ihdr
     });
-    write_png_chunk(&mut out, b"IDAT", &zlib);
-    write_png_chunk(&mut out, b"IEND", &[]);
-    Some(out)
+    write_png_chunk(out, b"IDAT", &zlib);
+    write_png_chunk(out, b"IEND", &[]);
+    true
 }
 
 fn write_png_chunk(out: &mut Vec<u8>, ty: &[u8; 4], data: &[u8]) {
