@@ -4228,6 +4228,10 @@ impl EditorApp {
                             self.notice = "Canvas live".into();
                         } else if matches!(raw.trim(), "minimap" | "mm") {
                             self.toggle_minimap();
+                        } else if let Some(hint) = palette::suggest(&raw) {
+                            self.notice = format!(
+                                "unknown :{raw} — did you mean :{hint}? · F1 lists keys"
+                            );
                         } else {
                             self.notice = format!(
                                 "unknown :{raw} — F1 lists keys · try rn, freeze, thaw, minimap"
@@ -11752,6 +11756,28 @@ mod tests {
         app.handle(CommandKey::Enter);
         assert!(
             app.notice.contains("unknown") && app.notice.contains("F1"),
+            "{}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn unknown_palette_typo_suggests_nearest_command() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(80, 24);
+        app.palette = true;
+        app.query = "mimimap".into();
+        app.handle(CommandKey::Enter);
+        assert!(
+            app.notice.contains("did you mean :minimap"),
+            "{}",
+            app.notice
+        );
+        app.palette = true;
+        app.query = "frmat".into();
+        app.handle(CommandKey::Enter);
+        assert!(
+            app.notice.contains("did you mean :format"),
             "{}",
             app.notice
         );
