@@ -5095,6 +5095,7 @@ impl EditorApp {
         };
         self.buffers.push(EditBuffer::from_text(name, "", "plain"));
         self.focus_at(self.buffers.len() - 1);
+        self.notice = "untitled buffer — rr names it · o opens a file".into();
     }
 
     fn scroll_help(&mut self, delta: isize) {
