@@ -3329,8 +3329,8 @@ impl EditorApp {
         }
     }
 
-    /// Sync-raster the selected card + neighbours so the first Flip frame has
-    /// real syntax glyphs (shared Arc with the background pool / minimap).
+    /// Sync-raster the selected card (+neighbours) so the first Flip frame has
+    /// real syntax glyphs. Under elevated pressure, only the front card is sync.
     fn warm_flip_previews_sync(&self) {
         if cfg!(test)
             || !self.kitty_graphics
@@ -3341,7 +3341,12 @@ impl EditorApp {
         }
         let count = self.buffers.len();
         let selected = self.flip.selected.min(count - 1);
-        for delta in [-2i32, -1, 0, 1, 2] {
+        let deltas: &[i32] = if self.last_pressure.is_elevated() {
+            &[0]
+        } else {
+            &[-1, 0, 1]
+        };
+        for &delta in deltas {
             let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
             let Some(job) = self.flip_preview_job(index) else {
                 continue;
@@ -10093,8 +10098,8 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     let settled =
         !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001;
     // Ratatui underlay wiped placeholders this frame — always rebind. Settled
-    // frames reuse the cached PNG (no re-encode) so Flip stays cheap.
-    if settled && same_box && !app.flip.scene_png.is_empty() {
+    // frames reuse the last RGB transmit (no re-raster) so Flip stays cheap.
+    if settled && same_box && !app.flip.scene_rgb.is_empty() {
         canvas::write_kitty_placeholders(&mut stdout(), tiles, FLIP3D_KITTY_IMAGE_ID)?;
         return Ok(());
     }
@@ -10117,17 +10122,16 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     );
     let enc_w = img_w.min(flip3d::SCENE_MAX_W);
     let enc_h = img_h.min(flip3d::SCENE_MAX_H);
-    let Some(png) = canvas::encode_rgb_png(enc_w, enc_h, &rgb) else {
-        return Ok(());
-    };
+    // f=24 raw RGB — skip PNG zlib/CRC on every Flip frame (AFK CPU win).
     app.flip.scene_rgb = rgb;
-    app.flip.scene_png = png;
-    // Always rewrite placeholders: draw() clears the tile every present.
-    let placed = canvas::paint_kitty_png_bytes_opts(
+    app.flip.scene_png.clear();
+    let placed = canvas::paint_kitty_rgb24_opts(
         &mut stdout(),
         &mut app.graphics,
         tiles,
-        &app.flip.scene_png,
+        &app.flip.scene_rgb,
+        enc_w,
+        enc_h,
         FLIP3D_KITTY_IMAGE_ID,
         !same_box,
         true,

@@ -1105,6 +1105,61 @@ pub fn paint_kitty_png_bytes_opts(
     Ok(true)
 }
 
+/// Transmit tightly-packed RGB24 directly (`f=24`) — no PNG encode.
+/// Flip uses this so cycling stays off the zlib/CRC path; minimap stays on `f=100`.
+pub fn paint_kitty_rgb24_opts(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    rgb: &[u8],
+    width: u32,
+    height: u32,
+    image_id: u32,
+    delete_first: bool,
+    rewrite_placeholders: bool,
+) -> io::Result<bool> {
+    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(3);
+    if inner.width < 2 || inner.height < 2 || width == 0 || height == 0 || image_id == 0 {
+        return Ok(false);
+    }
+    if rgb.len() < expected {
+        return Ok(false);
+    }
+    let backend = arbiter.backend();
+    if backend != GraphicsBackend::Kitty {
+        return Ok(false);
+    }
+    if delete_first {
+        write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    }
+    let b64 = base64_encode(&rgb[..expected]);
+    let cols = inner.width;
+    let rows = inner.height;
+    let box_params = format!("U=1,c={cols},r={rows},z=-1073741824");
+    let mut first = true;
+    let mut rest = b64.as_str();
+    while !rest.is_empty() {
+        let take = rest.len().min(4096);
+        let (chunk, next) = rest.split_at(take);
+        let more = if next.is_empty() { 0 } else { 1 };
+        if first {
+            write!(
+                out,
+                "\x1b_Ga=T,f=24,s={width},v={height},t=d,i={image_id},q=2,{box_params},m={more};{chunk}\x1b\\"
+            )?;
+            first = false;
+        } else {
+            write!(out, "\x1b_Gm={more};{chunk}\x1b\\")?;
+        }
+        rest = next;
+    }
+    if rewrite_placeholders {
+        write_kitty_placeholders(out, inner, image_id)?;
+    }
+    out.flush()?;
+    Ok(true)
+}
+
 /// Encode tightly-packed RGB24 into a PNG (filter None, zlib stored blocks).
 /// Used for the editor Kitty minimap so Ghostty can use the same `f=100` path as Canvas.
 pub fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
@@ -1278,6 +1333,32 @@ mod tests {
     fn base64_round_trip_prefix() {
         let encoded = base64_encode(b"PNG");
         assert!(encoded.starts_with("UE5H"));
+    }
+
+    #[test]
+    fn kitty_rgb24_skips_png_and_declares_pixel_size() {
+        unsafe {
+            std::env::set_var("TERM", "xterm-kitty");
+            std::env::set_var("TERM_PROGRAM", "kitty");
+        }
+        let mut out = Vec::new();
+        let mut arbiter = GraphicsArbiter::default();
+        arbiter.prefer_kitty_from_env();
+        let rgb = vec![10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        let inner = Rect {
+            x: 1,
+            y: 1,
+            width: 4,
+            height: 2,
+        };
+        let painted =
+            paint_kitty_rgb24_opts(&mut out, &mut arbiter, inner, &rgb, 2, 2, 91, true, true)
+                .unwrap();
+        assert!(painted);
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("f=24"), "expected raw RGB format: {text}");
+        assert!(text.contains("s=2,v=2"), "expected pixel size: {text}");
+        assert!(!text.contains("f=100"), "must not PNG-encode Flip frames");
     }
 
     #[test]
