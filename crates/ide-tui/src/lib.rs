@@ -1704,7 +1704,7 @@ impl EditorApp {
 
     fn toggle_canvas_frozen(&mut self) {
         if !self.canvas_open() {
-            self.notice = "open Browser or Phone first".into();
+            self.notice = "open Browser or Phone first — press 6 or 7".into();
             return;
         }
         self.canvas_frozen = !self.canvas_frozen;
@@ -3122,9 +3122,9 @@ impl EditorApp {
             terminal::Click::Switch => {
                 self.terminals.clear_selection();
                 self.notice = if self.terminals.show_console {
-                    "console".to_string()
+                    "console — b builds · r runs · output lands here".into()
                 } else {
-                    "terminal".to_string()
+                    "terminal — + opens a shell".into()
                 };
                 if !self.terminals.show_console {
                     self.focus_pane(PaneFocus::Terminal);
@@ -3822,7 +3822,7 @@ impl EditorApp {
                 self.editing = editing;
                 self.spatial_lines.clear();
                 self.graphics.clear();
-                self.notice = "spatial closed".into();
+                self.notice = "spatial closed — zo overview · zl lens".into();
             }
             SpatialOutcome::OpenLens(session) => {
                 self.spatial_lines = session.lines;
@@ -3848,8 +3848,9 @@ impl EditorApp {
                     })
                     .collect();
                 if self.spatial_lines.is_empty() {
-                    self.spatial_lines
-                        .push("impact: no evidence yet".into());
+                    self.spatial_lines.push(
+                        "impact: no evidence yet — edit nearby, then zi again".into(),
+                    );
                 }
                 self.spatial_cursor = 0;
                 self.spatial.active_mode = SpatialMode::Impact;
@@ -8178,9 +8179,9 @@ fn hover_action(app: &EditorApp, column: u16, row: u16) -> Option<&'static str> 
         }
         if app.terminals.switch_hit(local_x, local_y, chrome.terminal.width) {
             return Some(if app.terminals.show_console {
-                "Show the terminal"
+                "Show the shell terminal"
             } else {
-                "Show the console"
+                "Show build/run console"
             });
         }
         if app.on_terminal_side_seam(column, row) {
@@ -9474,7 +9475,11 @@ mod tests {
         let mut app = EditorApp::new("hello");
         app.note_frame(160, 40);
         app.control_command("freeze").unwrap();
-        assert!(app.notice().contains("open Browser"));
+        assert!(
+            app.notice().contains("open Browser") && app.notice().contains('6'),
+            "{}",
+            app.notice()
+        );
         assert!(!app.canvas_frozen);
         app.workbench(WorkbenchAction::Browser);
         assert!(app.canvas_open());
