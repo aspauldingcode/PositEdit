@@ -359,7 +359,10 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
         ("zt", "execution timeline"),
         ("zi", "change impact"),
         ("zp", "rich preview"),
-        ("Tab", "accept ghost text, or indent when none is shown"),
+        (
+            "Tab",
+            "edit buffers only: accept ghost / indent — terminal pane uses shell Tab",
+        ),
         ("Esc", "dismiss ghost text before leaving edit mode"),
         ("Shift-Down", "view: jump down 8 lines. edit: select down"),
         (
@@ -1327,9 +1330,16 @@ impl EditorApp {
         }
     }
 
+    /// Local Tab completion is editor-edit only — never the terminal pane.
+    fn tab_completion_active(&self) -> bool {
+        self.tab_enabled
+            && self.editing
+            && matches!(self.pane_focus(), PaneFocus::Editor)
+    }
+
     fn refresh_ghost(&mut self) {
         self.ghost = None;
-        if !self.tab_enabled || !self.editing {
+        if !self.tab_completion_active() {
             return;
         }
         let cursor = self.focused().cursor;
@@ -1370,6 +1380,10 @@ impl EditorApp {
     }
 
     fn accept_ghost(&mut self) -> bool {
+        if !self.tab_completion_active() {
+            self.ghost = None;
+            return false;
+        }
         let Some(ghost) = self.ghost.clone() else {
             return false;
         };
@@ -1411,7 +1425,8 @@ impl EditorApp {
             let _ = std::fs::write(dir.join("local-tab.json"), body);
         }
         self.notice = if self.tab_enabled {
-            "Tab completion on — lexical until a local model is installed".into()
+            "Tab completion on (edit buffers only) — lexical until a local model is installed"
+                .into()
         } else {
             "Tab completion off — Ctrl-Alt-T to enable".into()
         };
@@ -1831,6 +1846,31 @@ impl EditorApp {
                 other => return Err(format!("unsupported canvas key: {other}")),
             };
             if self.canvas_key(code, modifiers) {
+                return Ok(());
+            }
+        }
+        // Terminal pane owns Tab (and other keys) — never PositEdit completion.
+        if self.terminals.focused() {
+            let (code, modifiers) = match normalized.as_str() {
+                "esc" | "escape" => (KeyCode::Esc, KeyModifiers::NONE),
+                "tab" => (KeyCode::Tab, KeyModifiers::NONE),
+                "enter" | "return" => (KeyCode::Enter, KeyModifiers::NONE),
+                "backspace" => (KeyCode::Backspace, KeyModifiers::NONE),
+                "up" => (KeyCode::Up, KeyModifiers::NONE),
+                "down" => (KeyCode::Down, KeyModifiers::NONE),
+                "left" => (KeyCode::Left, KeyModifiers::NONE),
+                "right" => (KeyCode::Right, KeyModifiers::NONE),
+                "ctrl-q" | "ctrlq" => {
+                    self.handle(CommandKey::CtrlQ);
+                    return Ok(());
+                }
+                other if other.chars().count() == 1 => {
+                    let ch = other.chars().next().unwrap();
+                    (KeyCode::Char(ch), KeyModifiers::NONE)
+                }
+                other => return Err(format!("unsupported terminal key: {other}")),
+            };
+            if self.terminal_key(code, modifiers) {
                 return Ok(());
             }
         }
@@ -3392,6 +3432,22 @@ impl EditorApp {
             self.handle_tree_search(key);
             return;
         }
+        // Terminal keyboard focus: shell owns Tab (and other keys). Never route
+        // through editor ghost / indent completion while the PTY is focused.
+        if self.terminals.focused() {
+            match key {
+                CommandKey::CtrlQ => self.request_quit(),
+                CommandKey::Esc => {
+                    self.terminals.blur();
+                }
+                other => {
+                    if let Some(bytes) = command_key_terminal_bytes(other) {
+                        let _ = self.terminals.write_key(&bytes);
+                    }
+                }
+            }
+            return;
+        }
         if self.agent_focused {
             self.handle_agent(key);
             return;
@@ -3584,6 +3640,7 @@ impl EditorApp {
             }
             PaneFocus::Terminal => {
                 self.editing = false;
+                self.ghost = None;
                 self.agent_focused = false;
                 self.tree_focused = false;
                 self.runtime_focused = false;
@@ -3591,6 +3648,7 @@ impl EditorApp {
             }
             PaneFocus::Agent => {
                 self.editing = false;
+                self.ghost = None;
                 self.terminals.blur();
                 self.tree_focused = false;
                 self.runtime_focused = false;
@@ -3598,6 +3656,7 @@ impl EditorApp {
             }
             PaneFocus::Tree => {
                 self.editing = false;
+                self.ghost = None;
                 self.terminals.blur();
                 self.agent_focused = false;
                 self.runtime_focused = false;
@@ -3605,6 +3664,7 @@ impl EditorApp {
             }
             PaneFocus::Runtime => {
                 self.editing = false;
+                self.ghost = None;
                 self.terminals.blur();
                 self.agent_focused = false;
                 self.tree_focused = false;
@@ -8956,6 +9016,27 @@ fn terminal_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
     }
 }
 
+/// Map a dispatched `CommandKey` onto PTY bytes when the terminal owns focus.
+fn command_key_terminal_bytes(key: CommandKey) -> Option<Vec<u8>> {
+    Some(match key {
+        CommandKey::Tab => vec![b'\t'],
+        CommandKey::Enter => vec![b'\r'],
+        CommandKey::Backspace => vec![0x7f],
+        CommandKey::Delete => b"\x1b[3~".to_vec(),
+        CommandKey::Up => b"\x1b[A".to_vec(),
+        CommandKey::Down => b"\x1b[B".to_vec(),
+        CommandKey::Right => b"\x1b[C".to_vec(),
+        CommandKey::Left => b"\x1b[D".to_vec(),
+        CommandKey::Char(ch) => ch.to_string().into_bytes(),
+        CommandKey::CtrlA => vec![1],
+        CommandKey::CtrlS => vec![19],
+        CommandKey::CtrlW => vec![23],
+        CommandKey::CtrlZ => vec![26],
+        CommandKey::CtrlP => vec![16],
+        _ => return None,
+    })
+}
+
 fn present(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut EditorApp,
@@ -11546,6 +11627,65 @@ mod tests {
         assert!(app.text().ends_with('\t') || app.text().contains('\t'));
         assert!(!app.text().contains("NOPE"));
         assert!(text.len() < app.text().len());
+    }
+
+    #[test]
+    fn tab_completion_never_steals_the_terminal_pane() {
+        let mut app = EditorApp::new("let width = 1;\nlet w = wid");
+        app.tab_enabled = true;
+        app.note_frame(80, 24);
+        app.maintain_terminal();
+        editing(&mut app);
+        let len = app.text().chars().count();
+        for _ in 0..len {
+            app.handle(CommandKey::Right);
+        }
+        app.refresh_ghost();
+        assert!(app.ghost.as_ref().is_some_and(|ghost| ghost.text == "th"));
+
+        app.focus_pane(PaneFocus::Terminal);
+        assert_eq!(app.pane_focus(), PaneFocus::Terminal);
+        assert!(app.terminals.focused());
+        assert!(!app.editing);
+        assert!(app.ghost.is_none(), "leaving the editor must drop ghost text");
+
+        app.refresh_ghost();
+        assert!(
+            app.ghost.is_none(),
+            "ghost must stay off while the terminal owns the keyboard"
+        );
+
+        let before = app.text();
+        app.handle(CommandKey::Tab);
+        assert_eq!(
+            app.text(),
+            before,
+            "handle(Tab) must not indent/complete the buffer when terminal-focused"
+        );
+        app.control_key("tab").expect("tab");
+        assert_eq!(
+            app.text(),
+            before,
+            "control_key(tab) must not mutate the buffer when terminal-focused"
+        );
+        assert!(
+            app.terminal_key(KeyCode::Tab, KeyModifiers::NONE),
+            "shell Tab must still reach the PTY"
+        );
+
+        app.focus_pane(PaneFocus::Editor);
+        editing(&mut app);
+        let len = app.text().chars().count();
+        for _ in 0..len {
+            app.handle(CommandKey::Right);
+        }
+        app.refresh_ghost();
+        assert!(
+            app.ghost.as_ref().is_some_and(|ghost| ghost.text == "th"),
+            "editor edit mode still gets lexical Tab completion"
+        );
+        app.handle(CommandKey::Tab);
+        assert_eq!(app.text(), "let width = 1;\nlet w = width");
     }
 
     #[test]
