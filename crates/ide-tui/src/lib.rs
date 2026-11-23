@@ -3394,6 +3394,8 @@ impl EditorApp {
         let selected = self.flip.selected.min(self.buffers.len().saturating_sub(1));
         self.flip.settle();
         self.flip.close();
+        // Flip cards are large RGB Arcs — drop the working set when the stack closes.
+        self.preview_pool.clear();
         self.focus_at(selected);
         self.focus_pane(PaneFocus::Editor);
         self.notice = format!("switched to {}", self.focused().name);
@@ -3405,6 +3407,7 @@ impl EditorApp {
         }
         let restore = self.flip.restore.min(self.buffers.len().saturating_sub(1));
         self.flip.close();
+        self.preview_pool.clear();
         self.focus_at(restore);
         self.notice = "buffer switcher cancelled".into();
     }
@@ -10086,8 +10089,6 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }
-    // Keys already applied this frame — safe to sync-warm selected neighbours.
-    app.warm_flip_previews_sync();
     let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
     let (tiles, _) = app.content_tiles_and_strip(chrome.content);
     if tiles.width < 8 || tiles.height < 6 {
@@ -10098,11 +10099,13 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     let settled =
         !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001;
     // Ratatui underlay wiped placeholders this frame — always rebind. Settled
-    // frames reuse the last RGB transmit (no re-raster) so Flip stays cheap.
+    // frames reuse the last RGB transmit (no re-raster / no sync warm).
     if settled && same_box && !app.flip.scene_rgb.is_empty() {
         canvas::write_kitty_placeholders(&mut stdout(), tiles, FLIP3D_KITTY_IMAGE_ID)?;
         return Ok(());
     }
+    // Sync-warm only when we are about to raster a new scene.
+    app.warm_flip_previews_sync();
     let (cell_w, cell_h) = canvas_cell_pixels(app);
     let img_w = (tiles.width as u32)
         .saturating_mul(cell_w.max(1))
@@ -11360,6 +11363,27 @@ mod tests {
         app.handle(CommandKey::Esc);
         assert!(!app.flip.open);
         assert_eq!(app.focus, 2);
+    }
+
+    #[test]
+    fn flip_commit_clears_preview_pool() {
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        let key = 0xAF_CACE_u64;
+        let _ = app.preview_pool.get_or_render(minimap_gfx::PreviewJob {
+            key,
+            theme: app.minimap_theme,
+            width: 8,
+            height: 8,
+            lines: vec![vec![('x', (200, 200, 200))]],
+        });
+        assert!(app.preview_pool.get(key).is_some());
+        app.handle(CommandKey::AltTab);
+        app.handle(CommandKey::Enter);
+        assert!(
+            app.preview_pool.get(key).is_none(),
+            "closing Flip must drop cached card RGB"
+        );
     }
 
     #[test]
