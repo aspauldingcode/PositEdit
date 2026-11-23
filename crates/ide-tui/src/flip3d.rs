@@ -26,7 +26,65 @@ const SHRINK_PER_SLOT: f32 = 0.3;
 const FRONT_MAX_WIDTH: f32 = 0.5;
 const FRONT_MAX_HEIGHT: f32 = 0.5;
 const CAMERA_FOV_DEGREES: f32 = 28.0;
-const DIM: u8 = 40;
+/// Cap Kitty scene pixels so flip frames stay cheap (PNG+base64 bound).
+pub const SCENE_MAX_W: u32 = 560;
+pub const SCENE_MAX_H: u32 = 360;
+
+/// Terminal-derived colors for the Flip scene (from OSC/minimap theme).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneTheme {
+    pub backdrop: (u8, u8, u8),
+    pub paper: (u8, u8, u8),
+    pub fg: (u8, u8, u8),
+    pub title_bg: (u8, u8, u8),
+    pub title_fg: (u8, u8, u8),
+    pub border: (u8, u8, u8),
+    pub border_hot: (u8, u8, u8),
+}
+
+impl SceneTheme {
+    pub fn from_rgb(bg: (u8, u8, u8), fg: (u8, u8, u8), light: bool) -> Self {
+        let paper = if light {
+            (
+                bg.0.saturating_add(6).min(255),
+                bg.1.saturating_add(6).min(255),
+                bg.2.saturating_add(4).min(255),
+            )
+        } else {
+            (
+                bg.0.saturating_add(12).min(255),
+                bg.1.saturating_add(12).min(255),
+                bg.2.saturating_add(16).min(255),
+            )
+        };
+        let title_bg = if light {
+            (
+                bg.0.saturating_sub(18),
+                bg.1.saturating_sub(16),
+                bg.2.saturating_sub(20),
+            )
+        } else {
+            (
+                bg.0.saturating_add(28).min(255),
+                bg.1.saturating_add(28).min(255),
+                bg.2.saturating_add(36).min(255),
+            )
+        };
+        Self {
+            backdrop: bg,
+            paper,
+            fg,
+            title_bg,
+            title_fg: fg,
+            border: if light {
+                (140, 130, 110)
+            } else {
+                (90, 100, 120)
+            },
+            border_hot: (230, 160, 50),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct FlipSwitcher {
@@ -38,6 +96,8 @@ pub struct FlipSwitcher {
     pub restore: usize,
     /// Dirty flag so Kitty retransmits after a flip.
     pub dirty: bool,
+    /// Last Kitty placement cell box — skip placeholder rewrite when unchanged.
+    pub placed: Option<(u16, u16, u16, u16)>,
 }
 
 impl Default for FlipSwitcher {
@@ -48,6 +108,7 @@ impl Default for FlipSwitcher {
             scroll: 0.0,
             restore: 0,
             dirty: false,
+            placed: None,
         }
     }
 }
@@ -185,21 +246,24 @@ pub struct BufferCard {
 }
 
 /// Render Flip 3D scene to tightly packed RGB24 (Kitty PNG path).
+///
+/// Cards are painted at full scene pixel density and sample the shared
+/// minimap-glyph `PreviewImage` (or theme paper + text bars as fallback).
 pub fn render_scene_rgb(
     cards: &[BufferCard],
     scroll: f32,
     selected: usize,
     width: u32,
     height: u32,
+    theme: SceneTheme,
 ) -> Vec<u8> {
-    let w = width.max(2) as usize;
-    let h = height.max(2) as usize;
-    let mut rgb = vec![DIM; w * h * 3];
-    // Dim backdrop
+    let w = width.max(2).min(SCENE_MAX_W) as usize;
+    let h = height.max(2).min(SCENE_MAX_H) as usize;
+    let mut rgb = vec![0u8; w * h * 3];
     for px in rgb.chunks_exact_mut(3) {
-        px[0] = 18;
-        px[1] = 18;
-        px[2] = 22;
+        px[0] = theme.backdrop.0;
+        px[1] = theme.backdrop.1;
+        px[2] = theme.backdrop.2;
     }
     if cards.is_empty() {
         return rgb;
@@ -229,6 +293,7 @@ pub fn render_scene_rgb(
             card_w,
             card_h,
             index == selected,
+            theme,
         );
     }
     rgb
@@ -243,6 +308,7 @@ fn blit_card(
     card_w: f32,
     card_h: f32,
     selected: bool,
+    theme: SceneTheme,
 ) {
     let scale = pose.scale.max(0.15);
     let cw = (card_w * scale).max(8.0);
@@ -253,97 +319,95 @@ fn blit_card(
     let shear = (pose.rotate_y * PI / 180.0).tan() * 0.35;
     let pitch = (pose.rotate_x * PI / 180.0).sin() * 0.08;
     let alpha = pose.opacity.clamp(0.0, 1.0);
-    let cols = (cw / 7.0).max(8.0) as usize;
-    let rows = (ch / 12.0).max(4.0) as usize;
+    // Full pixel density — the old cols=cw/7 grid left backdrop holes (dot look).
+    let px_h = ch.ceil().max(8.0) as i32;
+    let border = if selected {
+        theme.border_hot
+    } else {
+        theme.border
+    };
+    let title_chars: Vec<char> = card.title.chars().collect();
 
-    for row in 0..rows {
-        let v = row as f32 / rows.max(1) as f32;
+    for row in 0..px_h {
+        let v = row as f32 / px_h.max(1) as f32;
         let row_scale = 1.0 - v * pitch;
         let row_w = cw * row_scale;
         let y = cy - ch * 0.5 + v * ch;
         let x0 = cx - row_w * 0.5 + (v - 0.5) * cw * shear;
-        for col in 0..cols {
-            let u = col as f32 / cols.max(1) as f32;
+        let row_px = row_w.ceil().max(1.0) as i32;
+        for col in 0..row_px {
+            let u = col as f32 / row_px.max(1) as f32;
             let x = x0 + u * row_w;
             let (px, py) = (x.round() as isize, y.round() as isize);
             if px < 0 || py < 0 || px as usize >= w || py as usize >= h {
                 continue;
             }
-            let (r, g, b) = card_pixel(card, row, rows, col, cols, selected);
+            let edge = row == 0 || row + 1 == px_h || col == 0 || col + 1 == row_px;
+            let (r, g, b) = if edge {
+                border
+            } else if v < 0.12 {
+                // Title bar: paper strip + ink for name glyphs (block samples).
+                let ti = ((u * title_chars.len().max(1) as f32) as usize).min(title_chars.len().saturating_sub(1));
+                if !title_chars.is_empty() && title_chars[ti] != ' ' && (col + row) % 2 == 0 {
+                    theme.title_fg
+                } else {
+                    theme.title_bg
+                }
+            } else {
+                // Body: sample shared syntax preview, else theme paper + line bars.
+                let body_v = ((v - 0.12) / 0.88).clamp(0.0, 1.0);
+                card_body_pixel(card, u, body_v, theme)
+            };
             put_blend(rgb, w, px as usize, py as usize, r, g, b, alpha);
-            // Slight thickness for the 3D edge.
-            if col + 1 == cols {
+            if col + 1 == row_px {
                 put_blend(
                     rgb,
                     w,
                     (px as usize).saturating_add(1).min(w - 1),
                     py as usize,
-                    r.saturating_sub(40),
-                    g.saturating_sub(40),
-                    b.saturating_sub(40),
-                    alpha * 0.8,
+                    r.saturating_sub(30),
+                    g.saturating_sub(30),
+                    b.saturating_sub(30),
+                    alpha * 0.75,
                 );
             }
         }
     }
 }
 
-fn card_pixel(
-    card: &BufferCard,
-    row: usize,
-    rows: usize,
-    col: usize,
-    cols: usize,
-    selected: bool,
-) -> (u8, u8, u8) {
-    let border = selected;
-    if row == 0 || row + 1 == rows || col == 0 || col + 1 == cols {
-        return if border {
-            (230, 180, 60)
-        } else {
-            (90, 100, 120)
-        };
-    }
-    if row == 1 {
-        // Title bar.
-        let title: Vec<char> = card.title.chars().collect();
-        let i = col.saturating_sub(1);
-        if i < title.len() {
-            return (220, 220, 230);
-        }
-        return (45, 50, 65);
-    }
-    // Prefer pre-rendered syntax preview (minimap glyphs + TokenKind colors).
+fn card_body_pixel(card: &BufferCard, u: f32, v: f32, theme: SceneTheme) -> (u8, u8, u8) {
     if let Some(preview) = card.preview.as_ref() {
         if preview.width > 0 && preview.height > 0 && !preview.rgb.is_empty() {
-            let body_rows = rows.saturating_sub(3).max(1);
-            let body_cols = cols.saturating_sub(2).max(1);
-            let br = row.saturating_sub(2).min(body_rows.saturating_sub(1));
-            let bc = col.saturating_sub(1).min(body_cols.saturating_sub(1));
-            let u = (bc as f32 + 0.5) / body_cols as f32;
-            let v = (br as f32 + 0.5) / body_rows as f32;
-            return sample_preview(preview, u, v);
+            return sample_preview(preview, u, v, theme.paper);
         }
     }
-    let line_i = row.saturating_sub(2);
-    if let Some(line) = card.lines.get(line_i) {
+    // Fallback while PreviewPool fills: theme paper + greeked source lines.
+    let line_i = (v * card.lines.len().max(1) as f32) as usize;
+    if let Some(line) = card.lines.get(line_i.min(card.lines.len().saturating_sub(1))) {
         let chars: Vec<char> = line.chars().collect();
-        let i = col.saturating_sub(1);
-        if i < chars.len() && chars[i] != ' ' {
-            return (200, 205, 215);
+        if !chars.is_empty() {
+            let ci = ((u * chars.len() as f32) as usize).min(chars.len() - 1);
+            if chars[ci] != ' ' {
+                return theme.fg;
+            }
         }
     }
-    (28, 30, 38)
+    theme.paper
 }
 
-fn sample_preview(preview: &PreviewImage, u: f32, v: f32) -> (u8, u8, u8) {
+fn sample_preview(
+    preview: &PreviewImage,
+    u: f32,
+    v: f32,
+    fallback: (u8, u8, u8),
+) -> (u8, u8, u8) {
     let w = preview.width.max(1);
     let h = preview.height.max(1);
     let x = ((u.clamp(0.0, 1.0) * (w.saturating_sub(1) as f32)).round() as u32).min(w - 1);
     let y = ((v.clamp(0.0, 1.0) * (h.saturating_sub(1) as f32)).round() as u32).min(h - 1);
     let i = ((y * w + x) * 3) as usize;
     if i + 2 >= preview.rgb.len() {
-        return (28, 30, 38);
+        return fallback;
     }
     (preview.rgb[i], preview.rgb[i + 1], preview.rgb[i + 2])
 }
@@ -395,11 +459,11 @@ pub fn text_overlay_lines(
             .saturating_sub(rise)
             .min(height.saturating_sub(card_h));
         let hot = index == selected;
-        let border = if hot { Color::Yellow } else { Color::Gray };
+        let border = if hot { Color::Yellow } else { Color::DarkGray };
+        // ANSI colors only — host terminal remaps to the active scheme.
         let title_style = Style::default()
-            .fg(if hot { Color::Black } else { Color::White })
-            .bg(if hot { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(Modifier::BOLD);
+            .fg(if hot { Color::Yellow } else { Color::Cyan })
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
         for dy in 0..card_h {
             let y = y0.saturating_add(dy) as usize;
             if y >= lines.len() {
@@ -434,14 +498,13 @@ pub fn text_overlay_lines(
             lines[y] = Line::from(Span::styled(row, Style::default().fg(border)));
         }
     }
-    // Header hint
+    // Header hint — reverse video so the host theme paints the chip.
     if let Some(first) = lines.first_mut() {
         *first = Line::from(Span::styled(
             " hold Tab  ·  ←→ choose  ·  release to switch  ·  Esc cancel ",
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightYellow)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
         ));
     }
     lines
@@ -462,6 +525,7 @@ pub fn paint_text_fallback(
     scroll: f32,
     selected: usize,
 ) {
+    // Clear to terminal default (no forced black) so Kitty/theme underlay matches.
     frame.render_widget(Clear, area);
     let lines = text_overlay_lines(cards, scroll, selected, area.width, area.height);
     frame.render_widget(
@@ -517,8 +581,11 @@ mod tests {
                 preview: None,
             },
         ];
-        let rgb = render_scene_rgb(&cards, 0.0, 0, 120, 80);
+        let theme = SceneTheme::from_rgb((250, 245, 230), (70, 80, 55), true);
+        let rgb = render_scene_rgb(&cards, 0.0, 0, 120, 80, theme);
         assert_eq!(rgb.len(), 120 * 80 * 3);
+        // Light theme backdrop — not the old near-black (18,18,22).
+        assert_eq!(&rgb[0..3], &[250, 245, 230]);
     }
 
     #[test]
@@ -539,10 +606,22 @@ mod tests {
                 rgb,
             })),
         }];
-        let scene = render_scene_rgb(&cards, 0.0, 0, 160, 100);
+        let theme = SceneTheme::from_rgb((30, 30, 36), (200, 200, 210), false);
+        let scene = render_scene_rgb(&cards, 0.0, 0, 160, 100, theme);
         assert!(
             scene.chunks(3).any(|p| p[1] > 150 && p[0] < 80),
             "expected green preview samples in scene"
+        );
+    }
+
+    #[test]
+    fn scene_caps_resolution_for_fast_flip() {
+        let theme = SceneTheme::from_rgb((250, 245, 230), (40, 40, 40), true);
+        let rgb = render_scene_rgb(&[], 0.0, 0, 2000, 2000, theme);
+        assert_eq!(
+            rgb.len(),
+            (SCENE_MAX_W * SCENE_MAX_H * 3) as usize,
+            "oversized requests must clamp"
         );
     }
 

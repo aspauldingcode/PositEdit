@@ -1053,6 +1053,20 @@ pub fn paint_kitty_png_bytes(
     png: &[u8],
     image_id: u32,
 ) -> io::Result<bool> {
+    paint_kitty_png_bytes_opts(out, arbiter, inner, png, image_id, true, true)
+}
+
+/// Flip/minimap animation path: replace image bytes in-place without delete flash.
+/// When `rewrite_placeholders` is false, only the bitmap is updated (same cell box).
+pub fn paint_kitty_png_bytes_opts(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    png: &[u8],
+    image_id: u32,
+    delete_first: bool,
+    rewrite_placeholders: bool,
+) -> io::Result<bool> {
     if inner.width < 2 || inner.height < 2 || png.is_empty() || image_id == 0 {
         return Ok(false);
     }
@@ -1060,7 +1074,9 @@ pub fn paint_kitty_png_bytes(
     if backend != GraphicsBackend::Kitty {
         return Ok(false);
     }
-    write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    if delete_first {
+        write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    }
     let b64 = base64_encode(png);
     let cols = inner.width;
     let rows = inner.height;
@@ -1082,7 +1098,9 @@ pub fn paint_kitty_png_bytes(
         }
         rest = next;
     }
-    write_kitty_placeholders(out, inner, image_id)?;
+    if rewrite_placeholders {
+        write_kitty_placeholders(out, inner, image_id)?;
+    }
     out.flush()?;
     Ok(true)
 }

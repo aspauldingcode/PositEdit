@@ -804,6 +804,24 @@ impl PreviewPool {
         }
     }
 
+    /// Cache hit or synchronous raster (Flip open path — front cards must not show dots).
+    /// Still Arc-shared afterward so later frames are zero-copy.
+    pub fn get_or_render(&self, job: PreviewJob) -> Arc<crate::flip3d::PreviewImage> {
+        if let Some(hit) = self.get(job.key) {
+            return hit;
+        }
+        let key = job.key;
+        let img = Arc::new(render_preview_job(&job));
+        if let Ok(mut map) = self.cache.lock() {
+            map.insert(key, Arc::clone(&img));
+        }
+        if let Ok(mut set) = self.inflight.lock() {
+            set.remove(&key);
+        }
+        self.ready_gen.fetch_add(1, Ordering::Release);
+        img
+    }
+
     /// True when background work finished since last poll (schedule a present).
     pub fn take_ready(&self) -> bool {
         let now = self.ready_gen.load(Ordering::Acquire);

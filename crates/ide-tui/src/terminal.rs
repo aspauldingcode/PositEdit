@@ -791,6 +791,17 @@ const SIDEBAR_MAX: u16 = 40;
 const DIVIDER: &str = "│";
 
 impl Panel {
+    /// Kill every PTY child before process `_exit` (Drop would otherwise be skipped).
+    pub fn shutdown(&mut self) {
+        self.open = false;
+        self.focused = false;
+        self.clear_selection();
+        self.sessions.clear(); // Session::drop sends SIGKILL + closes master
+        self.spawn_error = None;
+        self.active = false;
+        self.console.clear();
+    }
+
     /// Shrink PTY scrollback to the budget for the current OS memory pressure.
     pub fn apply_pressure(&mut self, level: PressureLevel) {
         let limit = level.scrollback_limit();

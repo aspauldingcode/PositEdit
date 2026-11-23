@@ -3285,39 +3285,72 @@ impl EditorApp {
             .collect()
     }
 
+    fn flip_preview_job(&self, index: usize) -> Option<minimap_gfx::PreviewJob> {
+        let buffer = self.buffers.get(index)?;
+        let theme = self.minimap_theme;
+        let cols =
+            ((minimap_gfx::FLIP_CARD_W / minimap_gfx::PX_PER_CHAR_BASE) as usize).clamp(24, 96);
+        let max_lines =
+            ((minimap_gfx::FLIP_CARD_H / minimap_gfx::PX_PER_LINE_BASE) as usize).clamp(8, 48);
+        let key = minimap_gfx::preview_key(
+            index,
+            buffer.document.revision(),
+            theme.fingerprint,
+            minimap_gfx::FLIP_CARD_W,
+            minimap_gfx::FLIP_CARD_H,
+        );
+        buffer.ensure_highlight_cache();
+        let mut lines = Vec::with_capacity(max_lines);
+        for line in 0..max_lines.min(buffer.document.len_lines().max(1)) {
+            lines.push(minimap_syntax_cells(buffer, line, cols, theme));
+        }
+        Some(minimap_gfx::PreviewJob {
+            key,
+            theme,
+            width: minimap_gfx::FLIP_CARD_W,
+            height: minimap_gfx::FLIP_CARD_H,
+            lines,
+        })
+    }
+
     /// Snapshot highlight cells and enqueue headless Kitty Flip previews (never blocks).
     fn schedule_flip_previews(&self) {
         if cfg!(test) || !minimap_gfx::host_is_kitty() {
             return;
         }
-        let theme = self.minimap_theme;
-        let cols = ((minimap_gfx::FLIP_CARD_W / minimap_gfx::PX_PER_CHAR_BASE) as usize).clamp(24, 96);
-        let max_lines =
-            ((minimap_gfx::FLIP_CARD_H / minimap_gfx::PX_PER_LINE_BASE) as usize).clamp(8, 48);
-        for (index, buffer) in self.buffers.iter().enumerate() {
-            let key = minimap_gfx::preview_key(
-                index,
-                buffer.document.revision(),
-                theme.fingerprint,
-                minimap_gfx::FLIP_CARD_W,
-                minimap_gfx::FLIP_CARD_H,
-            );
-            if !self.preview_pool.needs_work(key) {
+        for index in 0..self.buffers.len() {
+            let Some(job) = self.flip_preview_job(index) else {
+                continue;
+            };
+            if !self.preview_pool.needs_work(job.key) {
                 continue;
             }
-            buffer.ensure_highlight_cache();
-            let mut lines = Vec::with_capacity(max_lines);
-            for line in 0..max_lines.min(buffer.document.len_lines().max(1)) {
-                lines.push(minimap_syntax_cells(buffer, line, cols, theme));
-            }
-            self.preview_pool.request(minimap_gfx::PreviewJob {
-                key,
-                theme,
-                width: minimap_gfx::FLIP_CARD_W,
-                height: minimap_gfx::FLIP_CARD_H,
-                lines,
-            });
+            self.preview_pool.request(job);
         }
+    }
+
+    /// Sync-raster the selected card + neighbours so the first Flip frame has
+    /// real syntax glyphs (shared Arc with the background pool / minimap).
+    fn warm_flip_previews_sync(&self) {
+        if cfg!(test) || !minimap_gfx::host_is_kitty() || self.buffers.is_empty() {
+            return;
+        }
+        let count = self.buffers.len();
+        let selected = self.flip.selected.min(count - 1);
+        for delta in [-2i32, -1, 0, 1, 2] {
+            let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
+            let Some(job) = self.flip_preview_job(index) else {
+                continue;
+            };
+            let _ = self.preview_pool.get_or_render(job);
+        }
+        // Remaining buffers stay async.
+        self.schedule_flip_previews();
+    }
+
+    fn flip_scene_theme(&self) -> flip3d::SceneTheme {
+        let t = self.minimap_theme;
+        flip3d::SceneTheme::from_rgb(t.bg, t.fg, t.is_light())
     }
 
     fn open_flip_switcher(&mut self) {
@@ -3328,9 +3361,10 @@ impl EditorApp {
         }
         self.editing = false; // switcher owns keys until Tab release / Enter / Esc
         self.flip.open_at(self.focus, self.buffers.len());
+        self.flip.placed = None;
         self.flip_tick_at = Some(Instant::now());
-        // Kick background syntax rasters immediately — paint uses Arc hits only.
-        self.schedule_flip_previews();
+        // Front cards sync; the rest fill on the preview worker (zero-copy Arc).
+        self.warm_flip_previews_sync();
         self.notice = format!(
             "Flip 3D · {}/{} · ←→ choose · release Tab to switch · Esc cancel",
             self.flip.selected + 1,
@@ -3928,6 +3962,7 @@ impl EditorApp {
                 CommandKey::Tab => {}
                 CommandKey::AltTab | CommandKey::Right | CommandKey::Down => {
                     self.flip.flip(1, self.buffers.len());
+                    self.warm_flip_previews_sync();
                     self.notice = format!(
                         "buffer {}/{} · {}",
                         self.flip.selected + 1,
@@ -3943,6 +3978,7 @@ impl EditorApp {
                 | CommandKey::Up
                 | CommandKey::Backspace => {
                     self.flip.flip(-1, self.buffers.len());
+                    self.warm_flip_previews_sync();
                     self.notice = format!(
                         "buffer {}/{} · {}",
                         self.flip.selected + 1,
@@ -5100,15 +5136,20 @@ impl EditorApp {
         self.quit = true;
     }
 
-    /// Instant teardown for quit: kill Canvas capture, drop dock state, no saves.
+    /// Instant teardown for quit: kill Canvas/PTY workers, drop dock state, no saves.
+    /// Must run before `finish_quit_fast`'s `_exit` (which skips Drop destructors).
     fn shutdown_fast(&mut self) {
         while let Some(mut surface) = self.canvas_surfaces.pop() {
             surface.stop();
         }
+        self.terminals.shutdown();
+        self.preview_pool.clear();
+        self.flip.close();
         self.runtime_dock = None;
         self.runtime_focused = false;
         self.canvas_painted_size = None;
         self.canvas_image_id = None;
+        self.editor_minimap_id = None;
         self.canvas_chrome_dirty.set(true);
         self.canvas_placeholders_stale.set(false);
     }
@@ -8995,7 +9036,53 @@ fn host_pixels() -> Option<(u16, u16)> {
         .map(|size| (size.width, size.height))
 }
 
+/// Full host restore after raw/alt-screen/mouse/Kitty keyboard modes.
+///
+/// Bytes must match what we enabled in [`run`]: Kitty progressive enhancement
+/// pops with `CSI < 1 u` (NOT the old mistaken `CSI > 4 m`), and mouse teardown
+/// mirrors crossterm's [`DisableMouseCapture`] (includes 1003/1015).
+const TTY_RESTORE: &[u8] = b"\
+\x1b[<1u\
+\x1b[=0u\
+\x1b[>4;0m\
+\x1b[?2031l\x1b[?1004l\
+\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\
+\x1b[?2004l\
+\x1b_Ga=d\x1b\\\
+\x1b[?1049l\
+\x1b[0m\
+\x1b[?25h\
+\x1b[2J\x1b[H";
+
+/// Write restore sequences past Rust/C stdio buffers (needed before `_exit`).
+fn write_tty_restore_unbuffered() {
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::write(
+            libc::STDOUT_FILENO,
+            TTY_RESTORE.as_ptr() as *const libc::c_void,
+            TTY_RESTORE.len(),
+        );
+        // Also hit the controlling tty in case stdout was redirected mid-session.
+        let tty = libc::open(c"/dev/tty".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+        if tty >= 0 {
+            let _ = libc::write(
+                tty,
+                TTY_RESTORE.as_ptr() as *const libc::c_void,
+                TTY_RESTORE.len(),
+            );
+            let _ = libc::close(tty);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = stdout().write_all(TTY_RESTORE);
+        let _ = stdout().flush();
+    }
+}
+
 fn release_terminal() {
+    // Ordered restore for Drop / yazi leave/reenter paths (flush OK here).
     disable_theme_tracking();
     disable_key_release_reports();
     let _ = disable_raw_mode();
@@ -9003,10 +9090,13 @@ fn release_terminal() {
         stdout(),
         DisableMouseCapture,
         LeaveAlternateScreen,
+        crossterm::cursor::Show,
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        crossterm::cursor::MoveTo(0, 0),
-        crossterm::cursor::Show
+        crossterm::cursor::MoveTo(0, 0)
     );
+    // Belt-and-suspenders: same bytes as fast quit (Kitty images, paste, etc.).
+    let _ = stdout().write_all(TTY_RESTORE);
+    let _ = stdout().flush();
 }
 
 fn restore_terminal() -> io::Result<()> {
@@ -9267,20 +9357,14 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
 
 /// Restore the tty then terminate without unwinding a flooded alternate screen.
 fn finish_quit_fast() -> ! {
-    // Leave raw mode, best-effort restore bytes, then `_exit`.
-    // Never `flush()` here: if the PTY reader is blocked in `wait()`, flush
-    // deadlocks against a full output buffer (~600ms+ of "stuck" quit).
+    // Leave cooked mode first so the shell inherits a sane termios.
     let _ = disable_raw_mode();
-    {
-        use std::io::Write;
-        let mut out = stdout();
-        // Disable mouse, leave alt screen, reset attrs, show cursor, clear the
-        // primary screen so the shell prompt is not sitting on leftover UI.
-        let _ = out.write_all(
-            // Pop keyboard enhancement (\x1b[>4m), then mouse / alt-screen / cursor restore.
-            b"\x1b[>4m\x1b[?2031l\x1b[?1004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[0m\x1b[?25h\x1b[2J\x1b[H",
-        );
-    }
+    // Unbuffered write: `_exit` skips Rust stdout flush, and a buffered
+    // `write_all` of restore bytes was getting lost — leaving Kitty keyboard
+    // progressive enhancement on (shell typing broken). Never `flush()` the
+    // huge buffered Kitty PNG stream here (that deadlocked against a blocked
+    // PTY reader); libc::write of the tiny restore blob is enough.
+    write_tty_restore_unbuffered();
     #[cfg(unix)]
     unsafe {
         libc::_exit(0);
@@ -9976,7 +10060,7 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }
-    // Ensure jobs are queued; raster stays off the UI thread.
+    // Async warm only here — sync raster is reserved for open/arrow (not every tick).
     app.schedule_flip_previews();
     let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
     let (tiles, _) = app.content_tiles_and_strip(chrome.content);
@@ -9984,34 +10068,46 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         return Ok(());
     }
     let (cell_w, cell_h) = canvas_cell_pixels(app);
-    let img_w = (tiles.width as u32).saturating_mul(cell_w.max(1)).min(960);
-    let img_h = (tiles.height as u32).saturating_mul(cell_h.max(1)).min(640);
+    let img_w = (tiles.width as u32)
+        .saturating_mul(cell_w.max(1))
+        .min(flip3d::SCENE_MAX_W);
+    let img_h = (tiles.height as u32)
+        .saturating_mul(cell_h.max(1))
+        .min(flip3d::SCENE_MAX_H);
     // Skip heavy scene rebuild while the stack is settled and unchanged.
-    if !app.flip.dirty
-        && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001
-    {
+    if !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001 {
         return Ok(());
     }
     let cards = app.flip_cards();
+    let theme = app.flip_scene_theme();
     let rgb = flip3d::render_scene_rgb(
         &cards,
         app.flip.scroll,
         app.flip.selected,
         img_w,
         img_h,
+        theme,
     );
-    let Some(png) = canvas::encode_rgb_png(img_w, img_h, &rgb) else {
+    let enc_w = img_w.min(flip3d::SCENE_MAX_W);
+    let enc_h = img_h.min(flip3d::SCENE_MAX_H);
+    let Some(png) = canvas::encode_rgb_png(enc_w, enc_h, &rgb) else {
         return Ok(());
     };
-    let placed = canvas::paint_kitty_png_bytes(
+    let box_key = (tiles.x, tiles.y, tiles.width, tiles.height);
+    let same_box = app.flip.placed == Some(box_key);
+    // In-place replace: no delete flash, skip placeholder rewrite when box stable.
+    let placed = canvas::paint_kitty_png_bytes_opts(
         &mut stdout(),
         &mut app.graphics,
         tiles,
         &png,
         FLIP3D_KITTY_IMAGE_ID,
+        !same_box,
+        !same_box,
     )?;
     if placed {
         app.flip.dirty = false;
+        app.flip.placed = Some(box_key);
     }
     Ok(())
 }
@@ -10020,6 +10116,7 @@ fn clear_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     if app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }
+    app.flip.placed = None;
     write!(
         stdout(),
         "\x1b_Ga=d,d=i,i={FLIP3D_KITTY_IMAGE_ID},q=2\x1b\\"
@@ -11278,6 +11375,46 @@ mod tests {
     }
 
     #[test]
+    fn tty_restore_pops_kitty_keyboard_and_full_mouse() {
+        let text = String::from_utf8_lossy(TTY_RESTORE);
+        // Crossterm PopKeyboardEnhancementFlags is CSI < 1 u — never bare CSI > 4 m.
+        assert!(
+            text.contains("\u{1b}[<1u"),
+            "must pop Kitty progressive enhancement: {text:?}"
+        );
+        assert!(
+            text.contains("\u{1b}[=0u"),
+            "must zero Kitty keyboard flags: {text:?}"
+        );
+        assert!(
+            !TTY_RESTORE.windows(4).any(|w| w == b"\x1b[>4m"),
+            "must not emit the mistaken >4m-only sequence that left typing broken"
+        );
+        assert!(
+            text.contains("\u{1b}[>4;0m"),
+            "xterm modifyOtherKeys off should be present: {text:?}"
+        );
+        for mode in ["1006", "1015", "1003", "1002", "1000", "1049", "2004", "1004"] {
+            assert!(
+                text.contains(&format!("\u{1b}[?{mode}l")),
+                "missing disable ?{mode}l in restore"
+            );
+        }
+        assert!(text.contains("\u{1b}_Ga=d\u{1b}\\"), "must delete Kitty images");
+        assert!(text.contains("\u{1b}[?25h"), "must show cursor");
+    }
+
+    #[test]
+    fn shutdown_fast_clears_terminals_before_exit() {
+        let mut app = EditorApp::new("x\n");
+        app.terminals.open = true;
+        app.shutdown_fast();
+        assert!(!app.terminals.open);
+        assert_eq!(app.terminals.len(), 0);
+        assert!(app.canvas_surfaces.is_empty());
+    }
+
+    #[test]
     fn flip_preview_pool_is_nonblocking() {
         let pool = minimap_gfx::PreviewPool::new();
         let key = minimap_gfx::preview_key(0, 1, 2, 32, 24);
@@ -11303,6 +11440,40 @@ mod tests {
         assert_eq!(img.width, 32);
         assert_eq!(img.height, 24);
         assert_eq!(img.rgb.len(), 32 * 24 * 3);
+    }
+
+    #[test]
+    fn flip_preview_pool_sync_shares_arc_with_cache() {
+        let pool = minimap_gfx::PreviewPool::new();
+        let key = minimap_gfx::preview_key(1, 2, 3, 40, 28);
+        let job = minimap_gfx::PreviewJob {
+            key,
+            theme: minimap_gfx::MinimapTheme::light(),
+            width: 40,
+            height: 28,
+            lines: vec![vec![
+                ('p', (40, 80, 40)),
+                ('u', (40, 80, 40)),
+                ('b', (150, 60, 120)),
+            ]],
+        };
+        let a = pool.get_or_render(job.clone());
+        let b = pool.get(key).expect("cached after sync render");
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "zero-copy Arc reuse");
+        assert_eq!(a.rgb.len(), 40 * 28 * 3);
+        // Light theme paper must appear in the raster (not near-black).
+        assert!(
+            a.rgb.chunks(3).any(|p| p[0] > 200 && p[1] > 200),
+            "expected light paper pixels"
+        );
+    }
+
+    #[test]
+    fn flip_scene_theme_follows_terminal_light_palette() {
+        let theme = flip3d::SceneTheme::from_rgb((250, 245, 230), (70, 80, 55), true);
+        assert_eq!(theme.backdrop, (250, 245, 230));
+        assert!(theme.paper.0 >= 250);
+        assert_ne!(theme.backdrop, (18, 18, 22));
     }
 
     #[test]

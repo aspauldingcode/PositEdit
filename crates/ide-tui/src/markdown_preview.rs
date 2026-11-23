@@ -623,7 +623,8 @@ fn render_table_data_row(
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            // Default fg follows the host terminal (not forced White).
+            Style::default()
         };
         // Re-apply inline styles on the padded visible text when possible.
         if raw.contains("**") || raw.contains('*') || raw.contains('`') || raw.contains('_') {
@@ -708,11 +709,11 @@ fn inline_spans_concealed(line: &str) -> Vec<Span<'static>> {
         if bytes[i] == b'`' {
             if let Some(end) = line[i + 1..].find('`') {
                 flush(&mut plain, &mut spans);
+                // ANSI Green only — no fixed RGB chip bg so light/dark
+                // terminal themes keep their own paper color.
                 spans.push(Span::styled(
                     line[i + 1..i + 1 + end].to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .bg(Color::Rgb(40, 40, 40)),
+                    Style::default().fg(Color::Green),
                 ));
                 i += end + 2;
                 continue;
@@ -783,6 +784,35 @@ mod tests {
         assert!(flat.contains('│') || flat.contains('┌'), "{flat}");
         assert!(!flat.contains("| Key |"), "{flat}");
         assert!(flat.contains("edit"), "{flat}");
+    }
+
+    #[test]
+    fn inline_code_uses_terminal_ansi_without_fixed_chip_bg() {
+        let text = render("press `Enter` then `Esc`\n", 40);
+        let code: Vec<&Span<'static>> = text
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|s| s.content == "Enter" || s.content == "Esc")
+            .collect();
+        assert_eq!(code.len(), 2, "expected concealed inline code spans");
+        for span in code {
+            assert_eq!(span.style.fg, Some(Color::Green), "{span:?}");
+            assert_eq!(
+                span.style.bg, None,
+                "inline code must not force a chip background: {span:?}"
+            );
+        }
+        let table = render("| Key | Action |\n| --- | --- |\n| go | stay |\n", 40);
+        let body = table
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|s| s.content.contains("go") || s.content.trim() == "go");
+        // Body cells keep default fg (terminal ink), never forced White.
+        if let Some(span) = body {
+            assert_eq!(span.style.fg, None, "table body should use terminal fg: {span:?}");
+        }
     }
 
     #[test]
