@@ -789,15 +789,13 @@ fn kitty_mark(index: usize) -> char {
 }
 
 /// Unicode placeholder glyph for one cell of a virtual Kitty placement.
-#[cfg(test)]
-#[allow(dead_code)]
+///
+/// Every cell needs row+column diacritics — bare U+10EEEE smears on Ghostty.
 pub fn kitty_placeholder_cell(row: usize, col: usize) -> String {
     format!("\u{10EEEE}{}{}", kitty_mark(row), kitty_mark(col))
 }
 
 /// FG color that binds placeholders to `image_id` (indexed when id < 256).
-#[cfg(test)]
-#[allow(dead_code)]
 pub fn kitty_placeholder_fg(image_id: u32) -> ratatui::style::Color {
     if image_id < 256 {
         ratatui::style::Color::Indexed(image_id as u8)

@@ -7183,15 +7183,35 @@ fn paint_tile(
             Color::Reset
         };
         if minimap_gfx::host_is_kitty() {
-            // Blank theme strip only — U=1 placeholders are written once after
-            // PNG transmit (embedding them in ratatui duplicated/smeared the image).
-            let style = Style::default().bg(underlay_bg).fg(underlay_bg);
-            for row in 0..inner.height {
-                for dx in 0..minimap_w {
-                    let cell_ref =
-                        &mut screen[(base_x.saturating_add(dx), inner.y.saturating_add(row))];
-                    cell_ref.set_symbol(" ");
-                    cell_ref.set_style(style);
+            // Keep Unicode placeholders in the ratatui buffer (Canvas-style).
+            // Blanking to spaces every scroll wiped the Kitty binding and flashed
+            // the underlay while PNG encode/upload caught up — same class of bug
+            // terminal-phone avoids by alternating buffers without clearing the
+            // visible placeholder grid.
+            if let Some(image_id) = app.editor_minimap_id {
+                let fg = canvas::kitty_placeholder_fg(image_id);
+                let style = Style::default().fg(fg).bg(underlay_bg);
+                let rows = (inner.height as usize).min(255);
+                let cols = (minimap_w as usize).min(255);
+                for row in 0..rows {
+                    for dx in 0..cols {
+                        let cell_ref = &mut screen[(
+                            base_x.saturating_add(dx as u16),
+                            inner.y.saturating_add(row as u16),
+                        )];
+                        cell_ref.set_symbol(&canvas::kitty_placeholder_cell(row, dx));
+                        cell_ref.set_style(style);
+                    }
+                }
+            } else {
+                let style = Style::default().bg(underlay_bg).fg(underlay_bg);
+                for row in 0..inner.height {
+                    for dx in 0..minimap_w {
+                        let cell_ref =
+                            &mut screen[(base_x.saturating_add(dx), inner.y.saturating_add(row))];
+                        cell_ref.set_symbol(" ");
+                        cell_ref.set_style(style);
+                    }
                 }
             }
         } else {
@@ -8945,17 +8965,31 @@ fn present(
     app.graphics.prefer_kitty_from_env();
     // Refresh before ratatui draw so gutter/scrollbar match the Kitty strip.
     app.minimap_theme = minimap_gfx::terminal_theme();
-    // One synchronized frame: ratatui cells + Kitty placeholder swap together so
-    // Ghostty never paints a blank underlay between draw and image bind.
+    // Encode the next minimap PNG *before* the synchronized update. Holding the
+    // sync barrier open while zlib-encoding flashed the strip on every scroll
+    // (blank cells → late Kitty bind). terminal-phone/Canvas keep the visible
+    // placeholder grid alive and only swap pixels once the back buffer is ready.
+    let pending = prepare_editor_minimap_frame(app);
     execute!(stdout(), BeginSynchronizedUpdate)?;
     let drawn = terminal.draw(|frame| draw(frame, app));
     let canvas = paint_canvas_graphics(app);
-    let minimap = paint_editor_minimap_graphics(app);
+    let minimap = commit_editor_minimap_frame(app, pending);
     execute!(stdout(), EndSynchronizedUpdate)?;
     drawn?;
     canvas?;
     minimap?;
     Ok(())
+}
+
+/// Pre-encoded Kitty minimap frame ready to upload inside the sync barrier.
+struct PendingMinimapFrame {
+    rect: Rect,
+    rgb: Vec<u8>,
+    px_w: u32,
+    px_h: u32,
+    upload: u32,
+    retire: Option<u32>,
+    key: minimap_gfx::MinimapPaintKey,
 }
 
 fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
@@ -8983,30 +9017,26 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
     minimap_gfx::screen_rect_from_tile_local(slice, local)
 }
 
-fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
+/// Build the next minimap RGB outside the sync barrier (may encode PNG-sized bytes).
+fn prepare_editor_minimap_frame(app: &mut EditorApp) -> Option<PendingMinimapFrame> {
     app.graphics.prefer_kitty_from_env();
     if app.graphics.backend() != graphics::GraphicsBackend::Kitty {
-        // True text-only host — glyph underlay in paint_tile is the fallback.
-        clear_editor_minimap(app)?;
-        return Ok(());
+        let _ = clear_editor_minimap(app);
+        return None;
     }
     if app.last_pressure.is_critical() && !minimap_gfx::force_minimap() {
-        clear_editor_minimap(app)?;
+        let _ = clear_editor_minimap(app);
         app.minimap_frame_cache.borrow_mut().clear();
-        return Ok(());
+        return None;
     }
     let Some(rect) = editor_minimap_screen_rect(app) else {
-        clear_editor_minimap(app)?;
-        return Ok(());
+        let _ = clear_editor_minimap(app);
+        return None;
     };
     let (cell_w, cell_h) = canvas_cell_pixels(app);
-    // Re-sample each frame so Ghostty light cream wins over stale COLORFGBG.
-    app.minimap_theme = minimap_gfx::terminal_theme();
     let theme = app.minimap_theme;
     let warning = app.last_pressure.is_elevated();
     let scale = minimap_gfx::paint_scale(warning);
-    // Match cell geometry; soft-cap only so we never undersample into stripe soup.
-    // Under Warning, cols are already narrowed by edge_chrome — keep 1:1 px/cell.
     let max_w = if warning { 480 } else { 640 };
     let max_h = if warning { 1200 } else { 1600 };
     let focus = app.focus;
@@ -9038,49 +9068,64 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         theme: theme.id,
         language,
     };
-    let dirty = app.editor_minimap_key != Some(key);
-    if dirty {
-        let content = minimap_gfx::MinimapContentKey {
-            revision,
-            start_line: layout.start_line,
-            shown_lines: layout.shown_lines,
-            px_w,
-            px_h,
-            scale,
-            theme: theme.id,
-            language,
-        };
-        let front = app
-            .editor_minimap_id
-            .unwrap_or(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
-        let upload = minimap_gfx::minimap_alternate_id(front);
-        let retire = app.editor_minimap_id;
-        // Field-split: buffers + cache + graphics can borrow together; tinted
-        // RGB stays in cache and feeds PNG encode without an extra Vec copy.
-        let painted = {
-            let mut cache = app.minimap_frame_cache.borrow_mut();
-            let rgb = cache.rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
-                minimap_colored_line(&app.buffers[focus], line, cols, theme)
-            });
-            canvas::paint_kitty_rgb_swap(
-                &mut stdout(),
-                &mut app.graphics,
-                rect,
-                rgb,
-                px_w,
-                px_h,
-                upload,
-                retire,
-            )?
-        };
-        if painted {
-            app.editor_minimap_key = Some(key);
-            app.editor_minimap_id = Some(upload);
-        }
-    } else if let Some(id) = app.editor_minimap_id {
-        // Ratatui blank underlay wiped placeholders — rebind the live id.
-        canvas::write_kitty_placeholders(&mut stdout(), rect, id)?;
-        stdout().flush()?;
+    if app.editor_minimap_key == Some(key) {
+        // Placeholders stay in the ratatui buffer bound to the live id — no
+        // ANSI rewrite, no upload, no flash.
+        return None;
+    }
+    let content = minimap_gfx::MinimapContentKey {
+        revision,
+        start_line: layout.start_line,
+        shown_lines: layout.shown_lines,
+        px_w,
+        px_h,
+        scale,
+        theme: theme.id,
+        language,
+    };
+    let front = app
+        .editor_minimap_id
+        .unwrap_or(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
+    let upload = minimap_gfx::minimap_alternate_id(front);
+    let retire = app.editor_minimap_id;
+    let mut cache = app.minimap_frame_cache.borrow_mut();
+    let rgb = cache
+        .rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
+            minimap_colored_line(&app.buffers[focus], line, cols, theme)
+        })
+        .to_vec();
+    Some(PendingMinimapFrame {
+        rect,
+        rgb,
+        px_w,
+        px_h,
+        upload,
+        retire,
+        key,
+    })
+}
+
+/// Upload a prepared frame inside the sync barrier (placeholders already drawn).
+fn commit_editor_minimap_frame(
+    app: &mut EditorApp,
+    pending: Option<PendingMinimapFrame>,
+) -> io::Result<()> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let painted = canvas::paint_kitty_rgb_swap(
+        &mut stdout(),
+        &mut app.graphics,
+        pending.rect,
+        &pending.rgb,
+        pending.px_w,
+        pending.px_h,
+        pending.upload,
+        pending.retire,
+    )?;
+    if painted {
+        app.editor_minimap_key = Some(pending.key);
+        app.editor_minimap_id = Some(pending.upload);
     }
     Ok(())
 }
@@ -12148,6 +12193,31 @@ mod tests {
         app.handle(CommandKey::Char('n'));
         assert!(app.relative_line_numbers());
         assert!(app.notice.contains("relative"));
+    }
+
+    #[test]
+    fn kitty_minimap_draw_keeps_unicode_placeholders() {
+        // SAFETY: test-only env so host_is_kitty matches Ghostty/Kitty.
+        std::env::set_var("TERM_PROGRAM", "ghostty");
+        let mut app = EditorApp::new(&"line\n".repeat(80));
+        app.graphics.prefer_kitty_from_env();
+        assert!(
+            minimap_gfx::host_is_kitty(),
+            "test requires Kitty/Ghostty probe"
+        );
+        app.editor_minimap_id = Some(minimap_gfx::EDITOR_MINIMAP_IMAGE_ID);
+        app.minimap_on = true;
+        app.note_frame(120, 40);
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let placeholder = canvas::kitty_placeholder_cell(0, 0);
+        let hit = buf.content().iter().any(|cell| cell.symbol() == placeholder);
+        assert!(
+            hit,
+            "Kitty minimap cells must keep U+10EEEE placeholders across draws (blanking flashes)"
+        );
     }
 
     #[test]
