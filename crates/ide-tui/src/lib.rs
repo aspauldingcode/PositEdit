@@ -1810,10 +1810,6 @@ impl EditorApp {
         self.kitty_graphics = !self.kitty_graphics;
         persist_kitty_graphics(&self.workspace, self.kitty_graphics);
         graphics::set_kitty_allowed(self.kitty_graphics);
-        if !self.kitty_graphics {
-            self.preview_pool.clear();
-            self.flip.placed = None;
-        }
         self.graphics.refresh_kitty_policy();
         // Drop any bound Kitty surfaces so fallbacks paint cleanly.
         self.editor_minimap_id = None;
@@ -2393,18 +2389,6 @@ impl EditorApp {
             buffer.document.apply_pressure(level);
         }
         self.terminals.apply_pressure(level);
-        // Drop Flip/minimap preview RGB under jetsam-class pressure.
-        if level.is_critical() {
-            self.preview_pool.clear();
-            self.minimap_frame_cache.borrow_mut().clear();
-            // Drop highlight spans on background buffers (largest retained Vec).
-            let focus = self.focus;
-            for (index, buffer) in self.buffers.iter().enumerate() {
-                if index != focus {
-                    buffer.highlight_cache.borrow_mut().take();
-                }
-            }
-        }
     }
 
     pub fn handle(&mut self, key: CommandKey) {
@@ -3244,10 +3228,6 @@ impl EditorApp {
     }
 
     fn buffer_strip_hit(&self, column: u16, row: u16) -> Option<usize> {
-        // Flip owns the tile area — strip clicks must not steal focus under the stack.
-        if self.flip.open {
-            return None;
-        }
         let (_, strip) = self.content_tiles_and_strip(
             self.frame_chrome(Rect::new(0, 0, self.width, self.height))
                 .content,
@@ -3308,10 +3288,10 @@ impl EditorApp {
     fn flip_preview_job(&self, index: usize) -> Option<minimap_gfx::PreviewJob> {
         let buffer = self.buffers.get(index)?;
         let theme = self.minimap_theme;
-        let cols =
-            ((minimap_gfx::FLIP_CARD_W / minimap_gfx::PX_PER_CHAR_BASE) as usize).clamp(24, 96);
-        let max_lines =
-            ((minimap_gfx::FLIP_CARD_H / minimap_gfx::PX_PER_LINE_BASE) as usize).clamp(8, 48);
+        let px_char = minimap_gfx::PX_PER_CHAR_BASE * minimap_gfx::FLIP_GLYPH_SCALE;
+        let px_line = minimap_gfx::PX_PER_LINE_BASE * minimap_gfx::FLIP_GLYPH_SCALE;
+        let cols = ((minimap_gfx::FLIP_CARD_W / px_char) as usize).clamp(20, 64);
+        let max_lines = ((minimap_gfx::FLIP_CARD_H / px_line) as usize).clamp(8, 32);
         let key = minimap_gfx::preview_key(
             index,
             buffer.document.revision(),
@@ -3334,12 +3314,8 @@ impl EditorApp {
     }
 
     /// Snapshot highlight cells and enqueue headless Kitty Flip previews (never blocks).
-    /// Only while Flip is open — idle pre-warm of every buffer burned CPU/RAM on laptops.
     fn schedule_flip_previews(&self) {
-        if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() {
-            return;
-        }
-        if !self.flip.open || self.last_pressure.is_critical() {
+        if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() || !self.flip.open {
             return;
         }
         for index in 0..self.buffers.len() {
@@ -3353,33 +3329,27 @@ impl EditorApp {
         }
     }
 
-    /// Sync-raster the selected card (+ neighbours when RAM allows) so the first
-    /// Flip frame has real syntax glyphs (shared Arc with the background pool).
+    /// Sync-raster the selected card + neighbours so the first Flip frame has
+    /// real syntax glyphs (shared Arc with the background pool / minimap).
     fn warm_flip_previews_sync(&self) {
-        if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() || self.buffers.is_empty()
+        if cfg!(test)
+            || !self.kitty_graphics
+            || !minimap_gfx::host_is_kitty()
+            || self.buffers.is_empty()
         {
             return;
         }
         let count = self.buffers.len();
         let selected = self.flip.selected.min(count - 1);
-        // Urgent/Critical: only the front card. Warning: ±1. Normal: ±2.
-        let radius = if self.last_pressure.is_critical() {
-            0
-        } else if self.last_pressure.is_elevated() {
-            1
-        } else {
-            2
-        };
-        for delta in -radius..=radius {
+        for delta in [-2i32, -1, 0, 1, 2] {
             let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
             let Some(job) = self.flip_preview_job(index) else {
                 continue;
             };
             let _ = self.preview_pool.get_or_render(job);
         }
-        if !self.last_pressure.is_critical() {
-            self.schedule_flip_previews();
-        }
+        // Remaining buffers stay async.
+        self.schedule_flip_previews();
     }
 
     fn flip_scene_theme(&self) -> flip3d::SceneTheme {
@@ -3396,6 +3366,12 @@ impl EditorApp {
         self.editing = false; // switcher owns keys until Tab release / Enter / Esc
         self.flip.open_at(self.focus, self.buffers.len());
         self.flip.placed = None;
+        self.flip.scene_png.clear();
+        self.flip.scene_rgb.clear();
+        // Drop minimap bind before next draw so tile underlay does not leave
+        // orphan U+10EEEE static under the Flip scene.
+        self.editor_minimap_id = None;
+        self.editor_minimap_key = None;
         self.flip_tick_at = Some(Instant::now());
         // Front cards sync; the rest fill on the preview worker (zero-copy Arc).
         self.warm_flip_previews_sync();
@@ -7063,17 +7039,8 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         .filter(|count| *count > 0)
         .map(|count| format!("  sel {count}"))
         .unwrap_or_default();
-    let gfx = if app.kitty_graphics {
-        ""
-    } else {
-        "  gfx off"
-    };
-    let pressure = match app.last_pressure {
-        PressureLevel::Normal => String::new(),
-        other => format!("  mem {other:?}"),
-    };
     let status_body = format!(
-        "   {gaze}{selected}  {axis}  {mode}{gfx}{pressure}  {}  rev {}  {}  chars {}{pending}{notice}",
+        "   {gaze}{selected}  {axis}  {mode}  {}  rev {}  {}  chars {}{pending}{notice}",
         app.focused().name,
         app.focused().document.revision(),
         app.language(),
@@ -7116,10 +7083,7 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         paint_tab(frame, app, status_rect);
     }
     paint_seam_handles(frame, app);
-    // Skip strip paint under Flip — saves a present pass and avoids dead hit targets.
-    if !app.flip.open {
-        paint_buffer_strip(frame, app);
-    }
+    paint_buffer_strip(frame, app);
     if app.flip.open {
         paint_flip_switcher(frame, app);
     }
@@ -7576,7 +7540,16 @@ fn paint_flip_switcher(frame: &mut Frame, app: &EditorApp) {
     if tiles.width < 8 || tiles.height < 6 {
         return;
     }
-    // Text fallback always paints; Kitty composites over placeholders in present().
+    // Kitty path: solid theme underlay only. ASCII card chrome + Clear was wiping
+    // Unicode placeholders every frame; settled paints then skipped rebind → static.
+    if minimap_gfx::host_is_kitty() && app.kitty_graphics {
+        let t = app.minimap_theme;
+        let bg = Color::Rgb(t.bg.0, t.bg.1, t.bg.2);
+        frame.render_widget(Clear, tiles);
+        let fill = Paragraph::new("").style(Style::default().bg(bg).fg(bg));
+        frame.render_widget(fill, tiles);
+        return;
+    }
     let cards = app.flip_cards();
     flip3d::paint_text_fallback(
         frame,
@@ -7976,8 +7949,9 @@ fn paint_tile(
     let fold_total = folds.visible_line_count(line_count);
     let any_collapsed = folds.collapsed_count() > 0;
     let gutter_w = app.gutter.width_for(line_count);
-    // Kitty strip only when settled; during scroll / buffer slide use precision scrollbar.
-    let kitty_minimap = index == app.focus && app.kitty_minimap_enabled();
+    // Kitty strip only when settled; during scroll / Flip / buffer slide use scrollbar.
+    let kitty_minimap =
+        index == app.focus && app.kitty_minimap_enabled() && !app.flip.open;
     let (minimap_w, scroll_w) = if index == app.focus {
         app.focused_edge_chrome(tile_w, fold_total, visible.max(1))
     } else {
@@ -9274,9 +9248,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(100))
         } else {
-            // Quiet editor: wake less often so idle CPU stays near zero on
-            // constrained hosts (budget: near-zero idle).
-            Duration::from_millis(250)
+            Duration::from_millis(100)
         };
 
         let mut raw = Vec::new();
@@ -9347,7 +9319,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 canvas_dirty |= surface.poll_frame();
             }
         }
-        // Flip rasters only while the switcher is open (idle pre-warm was a CPU tax).
+        // Flip rasters only while open (idle pre-warm burned CPU on ≥2 buffers).
         if app.flip.open {
             app.schedule_flip_previews();
         }
@@ -10108,43 +10080,32 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }
-    // Async warm only here — sync raster is reserved for open/arrow (not every tick).
     app.schedule_flip_previews();
     let chrome = app.frame_chrome(Rect::new(0, 0, app.width, app.height));
     let (tiles, _) = app.content_tiles_and_strip(chrome.content);
     if tiles.width < 8 || tiles.height < 6 {
         return Ok(());
     }
-    let (cell_w, cell_h) = canvas_cell_pixels(app);
-    // Shrink the Kitty scene under memory pressure so Flip stays usable on jetsam hosts.
-    let max_w = if app.last_pressure.is_critical() {
-        flip3d::SCENE_MAX_W / 2
-    } else if app.last_pressure.is_elevated() {
-        (flip3d::SCENE_MAX_W * 3) / 4
-    } else {
-        flip3d::SCENE_MAX_W
-    };
-    let max_h = if app.last_pressure.is_critical() {
-        flip3d::SCENE_MAX_H / 2
-    } else if app.last_pressure.is_elevated() {
-        (flip3d::SCENE_MAX_H * 3) / 4
-    } else {
-        flip3d::SCENE_MAX_H
-    };
-    let img_w = (tiles.width as u32)
-        .saturating_mul(cell_w.max(1))
-        .min(max_w.max(160));
-    let img_h = (tiles.height as u32)
-        .saturating_mul(cell_h.max(1))
-        .min(max_h.max(120));
-    // Skip heavy scene rebuild while the stack is settled and unchanged.
-    if !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001 {
+    let box_key = (tiles.x, tiles.y, tiles.width, tiles.height);
+    let same_box = app.flip.placed == Some(box_key);
+    let settled =
+        !app.flip.dirty && (app.flip.scroll - app.flip.selected as f32).abs() < 0.001;
+    // Ratatui underlay wiped placeholders this frame — always rebind. Settled
+    // frames reuse the cached PNG (no re-encode) so Flip stays cheap.
+    if settled && same_box && !app.flip.scene_png.is_empty() {
+        canvas::write_kitty_placeholders(&mut stdout(), tiles, FLIP3D_KITTY_IMAGE_ID)?;
         return Ok(());
     }
+    let (cell_w, cell_h) = canvas_cell_pixels(app);
+    let img_w = (tiles.width as u32)
+        .saturating_mul(cell_w.max(1))
+        .min(flip3d::SCENE_MAX_W);
+    let img_h = (tiles.height as u32)
+        .saturating_mul(cell_h.max(1))
+        .min(flip3d::SCENE_MAX_H);
     let cards = app.flip_cards();
     let theme = app.flip_scene_theme();
-    let (enc_w, enc_h) = flip3d::render_scene_rgb_into(
-        &mut app.flip.scene_rgb,
+    let rgb = flip3d::render_scene_rgb(
         &cards,
         app.flip.scroll,
         app.flip.selected,
@@ -10152,17 +10113,14 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         img_h,
         theme,
     );
-    if !canvas::encode_rgb_png_into(
-        &mut app.flip.scene_png,
-        enc_w,
-        enc_h,
-        &app.flip.scene_rgb,
-    ) {
+    let enc_w = img_w.min(flip3d::SCENE_MAX_W);
+    let enc_h = img_h.min(flip3d::SCENE_MAX_H);
+    let Some(png) = canvas::encode_rgb_png(enc_w, enc_h, &rgb) else {
         return Ok(());
-    }
-    let box_key = (tiles.x, tiles.y, tiles.width, tiles.height);
-    let same_box = app.flip.placed == Some(box_key);
-    // In-place replace: no delete flash, skip placeholder rewrite when box stable.
+    };
+    app.flip.scene_rgb = rgb;
+    app.flip.scene_png = png;
+    // Always rewrite placeholders: draw() clears the tile every present.
     let placed = canvas::paint_kitty_png_bytes_opts(
         &mut stdout(),
         &mut app.graphics,
@@ -10170,7 +10128,7 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         &app.flip.scene_png,
         FLIP3D_KITTY_IMAGE_ID,
         !same_box,
-        !same_box,
+        true,
     )?;
     if placed {
         app.flip.dirty = false;
@@ -10184,6 +10142,8 @@ fn clear_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         return Ok(());
     }
     app.flip.placed = None;
+    app.flip.scene_png.clear();
+    app.flip.scene_rgb.clear();
     write!(
         stdout(),
         "\x1b_Ga=d,d=i,i={FLIP3D_KITTY_IMAGE_ID},q=2\x1b\\"
@@ -10381,17 +10341,10 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
 }
 
 fn refresh_minimap_theme(app: &mut EditorApp) {
-    // Dirty (focus/scheme change): probe soon. Idle: 2s — OSC shares stdin and
-    // a 500ms cadence was measurable idle CPU on Ghostty.
-    let interval = if app.minimap_theme_dirty {
-        Duration::from_millis(200)
-    } else {
-        Duration::from_secs(2)
-    };
     let due = app.minimap_theme_dirty
         || app
             .minimap_theme_probed_at
-            .is_none_or(|at| at.elapsed() >= interval);
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(500));
     if !due {
         return;
     }
@@ -10514,10 +10467,11 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
             app.editor_minimap_key = Some(key);
             app.editor_minimap_id = Some(image_id);
         }
+    } else {
+        // Tile Block clear wipes cells every draw — rebind without re-upload so
+        // the strip does not fall back to grey Unicode-placeholder static.
+        canvas::write_kitty_placeholders(&mut stdout(), rect, image_id)?;
     }
-    // Stable frames: leave placeholders alone. Rewriting them every tick (after
-    // ratatui spaces) was the scroll-tear path; paint_tile no longer blanks once
-    // `editor_minimap_id` is set.
     Ok(())
 }
 
@@ -11486,73 +11440,6 @@ mod tests {
         assert!(!app.terminals.open);
         assert_eq!(app.terminals.len(), 0);
         assert!(app.canvas_surfaces.is_empty());
-    }
-
-    #[test]
-    fn flip_previews_idle_gate_and_pressure_clear_pool() {
-        let mut app = EditorApp::new("a\n");
-        app.add_buffer("b.txt", "b\n");
-        app.note_frame(120, 40);
-        // Idle (Flip closed): schedule is a no-op even with 2 buffers.
-        app.schedule_flip_previews();
-        assert!(!app.flip.open);
-        // Kitty graphics off: warm must not run.
-        app.kitty_graphics = false;
-        graphics::set_kitty_allowed(false);
-        app.open_flip_switcher();
-        assert!(app.flip.open);
-        app.warm_flip_previews_sync();
-        // Urgent clears cached Flip RGB so jetsam hosts drop the working set.
-        app.kitty_graphics = true;
-        graphics::set_kitty_allowed(true);
-        let key = minimap_gfx::preview_key(0, 1, app.minimap_theme.fingerprint, 8, 8);
-        app.preview_pool.request(minimap_gfx::PreviewJob {
-            key,
-            theme: app.minimap_theme,
-            width: 8,
-            height: 8,
-            lines: vec![vec![('x', (1, 2, 3))]],
-        });
-        for _ in 0..40 {
-            if app.preview_pool.get(key).is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        app.force_memory_pressure(PressureLevel::Urgent);
-        assert!(
-            app.preview_pool.get(key).is_none(),
-            "Urgent must drop PreviewPool RGB"
-        );
-        // Strip hits ignored while Flip owns the tiles.
-        app.note_frame(160, 40);
-        let (_, strip) = app.content_tiles_and_strip(
-            app.frame_chrome(Rect::new(0, 0, app.width, app.height))
-                .content,
-        );
-        if strip.height > 0 {
-            assert!(app.buffer_strip_hit(strip.x + 1, strip.y).is_none());
-        }
-        graphics::set_kitty_allowed(true);
-    }
-
-    #[test]
-    fn status_marks_gfx_off_and_memory_pressure() {
-        let mut app = EditorApp::new("file\n");
-        app.note_frame(120, 40);
-        app.kitty_graphics = false;
-        app.force_memory_pressure(PressureLevel::Warning);
-        let screen = rendered(&app);
-        assert!(
-            screen.contains("gfx off"),
-            "status should show gfx off: {}",
-            screen.chars().rev().take(200).collect::<String>().chars().rev().collect::<String>()
-        );
-        assert!(
-            screen.contains("mem Warning") || screen.contains("Warning"),
-            "status should surface pressure: {}",
-            screen.chars().rev().take(240).collect::<String>().chars().rev().collect::<String>()
-        );
     }
 
     #[test]

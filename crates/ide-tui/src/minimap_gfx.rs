@@ -669,8 +669,10 @@ fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
 }
 
 /// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
-pub const FLIP_CARD_W: u32 = 288;
-pub const FLIP_CARD_H: u32 = 192;
+/// Scale-2 glyphs need room — 1× 5×7 looked like TV static when sampled onto cards.
+pub const FLIP_CARD_W: u32 = 420;
+pub const FLIP_CARD_H: u32 = 280;
+pub const FLIP_GLYPH_SCALE: u32 = 2;
 
 /// Stable cache key for a buffer strip / Flip card preview.
 pub fn preview_key(slot: usize, revision: u64, theme: u64, width: u32, height: u32) -> u64 {
@@ -848,7 +850,14 @@ fn render_preview_job(job: &PreviewJob) -> crate::flip3d::PreviewImage {
     let width = job.width.max(8);
     let height = job.height.max(8);
     let line_count = job.lines.len().max(1);
-    let layout = layout_proportional(line_count, 0, line_count.min(24).max(1), height, 1);
+    // Scale-2 glyphs so Flip cards stay legible (1× reads as static noise).
+    let layout = layout_proportional(
+        line_count,
+        0,
+        line_count.min(24).max(1),
+        height,
+        FLIP_GLYPH_SCALE,
+    );
     let lines = &job.lines;
     let rgb = render_base_rgb(layout, width, height, job.theme, |line, cols| {
         lines
@@ -965,6 +974,36 @@ mod tests {
         let large = layout_proportional(80, 40, 10, 160, 1);
         assert_eq!(large.start_line, 35);
         assert_eq!(line_at_px(large, 0, 80), 35);
+    }
+
+    #[test]
+    fn flip_preview_uses_double_scale_glyphs() {
+        assert!(FLIP_GLYPH_SCALE >= 2, "1× Flip glyphs read as TV static");
+        assert!(FLIP_CARD_W >= 360 && FLIP_CARD_H >= 240);
+        let theme = MinimapTheme::light();
+        let job = PreviewJob {
+            key: 1,
+            theme,
+            width: FLIP_CARD_W,
+            height: FLIP_CARD_H,
+            lines: vec![
+                vec![('A', theme.fg), ('B', theme.keyword), ('C', theme.string)],
+                vec![('1', theme.digit), ('2', theme.fg), ('3', theme.function)],
+            ],
+        };
+        let img = render_preview_job(&job);
+        assert_eq!(img.width, FLIP_CARD_W);
+        assert_eq!(img.height, FLIP_CARD_H);
+        // Light paper must dominate — not a dark static field.
+        let light = img
+            .rgb
+            .chunks(3)
+            .filter(|p| p[0] > 200 && p[1] > 190 && p[2] > 180)
+            .count();
+        assert!(
+            light > (img.rgb.len() / 3) / 2,
+            "Flip preview should be mostly light paper, got {light} light px"
+        );
     }
 
     #[test]

@@ -96,12 +96,11 @@ pub struct FlipSwitcher {
     pub restore: usize,
     /// Dirty flag so Kitty retransmits after a flip.
     pub dirty: bool,
-    /// Last Kitty placement cell box — skip placeholder rewrite when unchanged.
+    /// Last Kitty placement cell box — skip delete when unchanged.
     pub placed: Option<(u16, u16, u16, u16)>,
-    /// Reused scene RGB (avoids alloc every flip tick).
-    pub scene_rgb: Vec<u8>,
-    /// Reused PNG bytes for Kitty replace.
+    /// Cached last PNG so settled frames can rebind placeholders without re-encode.
     pub scene_png: Vec<u8>,
+    pub scene_rgb: Vec<u8>,
 }
 
 impl Default for FlipSwitcher {
@@ -113,8 +112,8 @@ impl Default for FlipSwitcher {
             restore: 0,
             dirty: false,
             placed: None,
-            scene_rgb: Vec::new(),
             scene_png: Vec::new(),
+            scene_rgb: Vec::new(),
         }
     }
 }
@@ -255,8 +254,6 @@ pub struct BufferCard {
 ///
 /// Cards are painted at full scene pixel density and sample the shared
 /// minimap-glyph `PreviewImage` (or theme paper + text bars as fallback).
-/// Production paint uses [`render_scene_rgb_into`]; this wrapper stays for tests.
-#[allow(dead_code)]
 pub fn render_scene_rgb(
     cards: &[BufferCard],
     scroll: f32,
@@ -265,32 +262,16 @@ pub fn render_scene_rgb(
     height: u32,
     theme: SceneTheme,
 ) -> Vec<u8> {
-    let mut out = Vec::new();
-    render_scene_rgb_into(&mut out, cards, scroll, selected, width, height, theme);
-    out
-}
-
-/// Like [`render_scene_rgb`] but reuses `out` (Flip tick path — zero fresh alloc).
-pub fn render_scene_rgb_into(
-    out: &mut Vec<u8>,
-    cards: &[BufferCard],
-    scroll: f32,
-    selected: usize,
-    width: u32,
-    height: u32,
-    theme: SceneTheme,
-) -> (u32, u32) {
     let w = width.max(2).min(SCENE_MAX_W) as usize;
     let h = height.max(2).min(SCENE_MAX_H) as usize;
-    let need = w.saturating_mul(h).saturating_mul(3);
-    out.resize(need, 0);
-    for px in out.chunks_exact_mut(3) {
+    let mut rgb = vec![0u8; w * h * 3];
+    for px in rgb.chunks_exact_mut(3) {
         px[0] = theme.backdrop.0;
         px[1] = theme.backdrop.1;
         px[2] = theme.backdrop.2;
     }
     if cards.is_empty() {
-        return (w as u32, h as u32);
+        return rgb;
     }
     let count = cards.len();
     let card_w = ((w as f32) * FRONT_MAX_WIDTH).max(40.0);
@@ -309,7 +290,7 @@ pub fn render_scene_rgb_into(
             continue;
         }
         blit_card(
-            out,
+            &mut rgb,
             w,
             h,
             &cards[index],
@@ -320,7 +301,7 @@ pub fn render_scene_rgb_into(
             theme,
         );
     }
-    (w as u32, h as u32)
+    rgb
 }
 
 fn blit_card(
@@ -647,22 +628,6 @@ mod tests {
             (SCENE_MAX_W * SCENE_MAX_H * 3) as usize,
             "oversized requests must clamp"
         );
-    }
-
-    #[test]
-    fn scene_rgb_into_reuses_caller_buffer() {
-        let theme = SceneTheme::from_rgb((250, 245, 230), (40, 40, 40), true);
-        let mut buf = Vec::with_capacity(64);
-        let ptr = buf.as_ptr();
-        let (w, h) = render_scene_rgb_into(&mut buf, &[], 0.0, 0, 40, 30, theme);
-        assert_eq!(w, 40);
-        assert_eq!(h, 30);
-        assert_eq!(buf.len(), 40 * 30 * 3);
-        // Capacity preserved → no reallocation when buffer was large enough.
-        let _ = ptr;
-        let cap = buf.capacity();
-        let _ = render_scene_rgb_into(&mut buf, &[], 0.0, 0, 40, 30, theme);
-        assert_eq!(buf.capacity(), cap, "reuse must keep capacity");
     }
 
     #[test]
