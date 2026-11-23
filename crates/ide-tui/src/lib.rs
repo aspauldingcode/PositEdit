@@ -251,7 +251,8 @@ Editing
   H edits at the first non-blank on the line. L edits at the line end.
   (Same placements as Neovim i / a / I / A — clearer keys, Vim letters stay put.)
   Esc returns to view mode.
-  Left gutter: click ● column for breakpoints, numbers to jump.
+  Left gutter: click ● for breakpoints, the git stripe for diff detail,
+  numbers to jump.
   rn toggles relative line numbers. Palette :42 / :+10 / :-5 jumps lines.
   Right edge: Kitty code minimap when Ghostty/kitty can draw it (glyph
   fallback otherwise). The minimap stays on the focused editor even when the
@@ -2541,23 +2542,41 @@ impl EditorApp {
                     }
                 } else if local_x < gutter_w {
                     let doc_line = self.focused().scroll + line_in_view + 1;
-                    if let Some(path) = self.focused().path.clone() {
-                        if gutter::hit(local_x as u16, gutter_w as u16)
-                            == Some(gutter::GutterHit::Breakpoint)
-                        {
-                            let on = self.gutter.toggle_breakpoint(&path, doc_line);
-                            self.notice = if on {
-                                format!(
-                                    "breakpoint on line {doc_line} — click ● again to clear · 3 debug"
-                                )
+                    match gutter::hit(local_x as u16, gutter_w as u16) {
+                        Some(gutter::GutterHit::Breakpoint) => {
+                            if let Some(path) = self.focused().path.clone() {
+                                let on = self.gutter.toggle_breakpoint(&path, doc_line);
+                                self.notice = if on {
+                                    format!(
+                                        "breakpoint on line {doc_line} — click ● again to clear · 3 debug"
+                                    )
+                                } else {
+                                    format!("breakpoint cleared line {doc_line}")
+                                };
                             } else {
-                                format!("breakpoint cleared line {doc_line}")
+                                self.notice =
+                                    "save the file first — breakpoints need a path".into();
+                            }
+                        }
+                        Some(gutter::GutterHit::Git) => {
+                            let mark = self
+                                .gutter
+                                .git_mark(self.focused().path.as_deref(), doc_line);
+                            let label = gutter::git_mark_label(mark);
+                            self.jump_lines(LineJump::Absolute(doc_line));
+                            // jump_lines sets a bare "line N" notice — enrich with git detail.
+                            self.notice = match mark {
+                                gutter::GitMark::None => format!(
+                                    "line {doc_line} · no local git diff on this line"
+                                ),
+                                _ => format!(
+                                    "line {doc_line} · git {label} (uncommitted vs HEAD)"
+                                ),
                             };
-                        } else {
+                        }
+                        _ => {
                             self.jump_lines(LineJump::Absolute(doc_line));
                         }
-                    } else {
-                        self.jump_lines(LineJump::Absolute(doc_line));
                     }
                     return;
                 } else if on_edge {
@@ -8631,6 +8650,7 @@ fn editor_chrome_hover(
     if local_x < gutter_w {
         return Some(match gutter::hit(local_x, gutter_w) {
             Some(gutter::GutterHit::Breakpoint) => "Click to toggle breakpoint",
+            Some(gutter::GutterHit::Git) => "Git diff stripe · click for detail",
             Some(gutter::GutterHit::Number) => {
                 if app.gutter.relative_numbers {
                     "Line numbers · rn for absolute"
@@ -12118,6 +12138,35 @@ mod tests {
         app.handle(CommandKey::Char('n'));
         assert!(app.relative_line_numbers());
         assert!(app.notice.contains("relative"));
+    }
+
+    #[test]
+    fn git_gutter_click_explains_diff_status() {
+        let mut app = EditorApp::new("a\nb\nc\nd\n");
+        let root = temp_dir("git-gutter");
+        let path = root.join("demo.rs");
+        fs::write(&path, "a\nb\nc\nd\n").unwrap();
+        app.set_workspace(root.clone());
+        app.buffers[0].path = Some(path);
+        app.note_frame(80, 24);
+        let chrome = app.frame_chrome(Rect::new(0, 0, 80, 24));
+        let window = app.layout_window(chrome.content, app.axis());
+        let slice = layout::tile_slice(window, app.focus, app.view).expect("tile");
+        // local_x 1 = git stripe (after ●)
+        let git_col = slice.screen_x.saturating_add(2);
+        let row = slice.screen_y.saturating_add(2);
+        let hint = editor_chrome_hover(&app, &chrome, git_col, row).unwrap_or("");
+        assert!(
+            hint.to_ascii_lowercase().contains("git"),
+            "hint={hint:?}"
+        );
+        app.pointer(Pointer::Down { column: git_col, row }, 80, 24);
+        assert!(
+            app.notice.contains("git") || app.notice.contains("no local git"),
+            "{}",
+            app.notice
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

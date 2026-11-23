@@ -216,13 +216,25 @@ fn load_git_line_marks(workspace: &Path, path: &Path) -> HashMap<usize, GitMark>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GutterHit {
     Breakpoint,
+    /// Diff stripe between ● and the line number.
+    Git,
     Number,
 }
 
 pub fn hit(column_in_gutter: u16, _width: u16) -> Option<GutterHit> {
     match column_in_gutter {
         0 => Some(GutterHit::Breakpoint),
+        1 => Some(GutterHit::Git),
         _ => Some(GutterHit::Number),
+    }
+}
+
+pub fn git_mark_label(mark: GitMark) -> &'static str {
+    match mark {
+        GitMark::Added => "added",
+        GitMark::Modified => "modified",
+        GitMark::Deleted => "deleted nearby",
+        GitMark::None => "unchanged",
     }
 }
 
@@ -266,5 +278,13 @@ mod tests {
         assert!(state.has_breakpoint(Some(&path), 12));
         assert!(!state.toggle_breakpoint(&path, 12));
         assert!(!state.has_breakpoint(Some(&path), 12));
+    }
+
+    #[test]
+    fn hit_separates_git_stripe_from_line_numbers() {
+        assert_eq!(hit(0, 8), Some(GutterHit::Breakpoint));
+        assert_eq!(hit(1, 8), Some(GutterHit::Git));
+        assert_eq!(hit(2, 8), Some(GutterHit::Number));
+        assert_eq!(hit(5, 8), Some(GutterHit::Number));
     }
 }
