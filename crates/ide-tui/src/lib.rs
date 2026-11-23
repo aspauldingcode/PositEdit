@@ -388,8 +388,8 @@ drag its top edge for height. Session list on the right (including debug).\n\n\
 ### Flip 3D buffer switcher\n\n\
 In **view mode** (not editing), **press and hold Tab** to open the ShojiWM-style stack (needs **2+ buffers**). It starts on the **current** buffer — hold+release alone keeps you there. **←→ / ↑↓** choose another buffer · **release Tab** (or Enter) switches · **Esc** cancels. View-mode **gs** is a fallback when the terminal does not report key-up. Kitty hosts pre-render syntax cards in the background.\n\n\
 ### Closing\n\n\
-**w** closes the focused buffer. **q** quits. Dirty buffers ask first: **y** closes, **!** saves and \
-closes, **n** cancels. **i** toggles notifications.\n\n\
+**w** closes the focused buffer. **q** quits. Dirty buffers ask first: **y** saves and closes, **!** \
+discards edits and closes, **n** cancels. **i** toggles notifications.\n\n\
 ---\n\n\
 # Keybinds\n\n",
     );
@@ -4621,23 +4621,25 @@ impl EditorApp {
     fn handle_overlay(&mut self, key: CommandKey) {
         match &self.overlay.clone() {
             Overlay::Quit => match key {
-                CommandKey::Char('y') => {
+                // y = save all dirty buffers then quit; ! = discard all edits and quit.
+                CommandKey::Char('y') => self.save_all_and_quit(),
+                CommandKey::Char('!') => {
                     self.overlay = Overlay::None;
                     self.shutdown_fast();
                     self.quit = true;
                 }
-                CommandKey::Char('!') => self.save_all_and_quit(),
                 CommandKey::Char('n') | CommandKey::Esc => self.overlay = Overlay::None,
                 _ => {}
             },
             Overlay::Close(index) => {
                 let index = *index;
                 match key {
-                    CommandKey::Char('y') => {
+                    // y = save then close; ! = discard edits and close.
+                    CommandKey::Char('y') => self.save_and_close(index),
+                    CommandKey::Char('!') => {
                         self.overlay = Overlay::None;
                         self.close_buffer(index);
                     }
-                    CommandKey::Char('!') => self.save_and_close(index),
                     CommandKey::Esc | CommandKey::Char('n') => self.overlay = Overlay::None,
                     _ => {}
                 }
@@ -7466,8 +7468,8 @@ fn settings_hot(app: &EditorApp, index: usize) -> bool {
 
 fn prompt_line(app: &EditorApp) -> Option<String> {
     match &app.overlay {
-        Overlay::Quit => Some("y quit  ! save&quit  n cancel".to_string()),
-        Overlay::Close(_) => Some("y close  ! save&close  n cancel".to_string()),
+        Overlay::Quit => Some("y save&quit  ! quit  n cancel".to_string()),
+        Overlay::Close(_) => Some("y save&close  ! close  n cancel".to_string()),
         Overlay::Rename(name) => Some(format!("rename: {name}")),
         Overlay::None | Overlay::Settings | Overlay::Vim | Overlay::Menu(_) => None,
     }
@@ -9254,7 +9256,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(100))
         } else {
-            Duration::from_millis(100)
+            // Fully idle editor: wake less often (AFK battery / CPU).
+            Duration::from_millis(250)
         };
 
         let mut raw = Vec::new();
@@ -9325,10 +9328,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 canvas_dirty |= surface.poll_frame();
             }
         }
-        // Flip rasters only while open (idle pre-warm burned CPU on ≥2 buffers).
-        if app.flip.open {
-            app.schedule_flip_previews();
-        }
+        // Flip warm runs in paint_flip_graphics; only react to worker completions here.
         if app.preview_pool.take_ready() {
             present_needed = true;
             if app.flip.open {
@@ -12529,12 +12529,12 @@ mod tests {
         app.handle(CommandKey::Char('w'));
         assert_eq!(app.buffers.len(), 1);
         assert!(app.text().contains('!'));
-        assert!(rendered(&app).contains("y close"));
-        assert!(rendered(&app).contains("! save&close"));
+        assert!(rendered(&app).contains("y save&close"));
+        assert!(rendered(&app).contains("! close"));
         app.handle(CommandKey::Esc);
         assert!(app.text().contains('!'));
         app.handle(CommandKey::Char('w'));
-        app.handle(CommandKey::Char('!'));
+        app.handle(CommandKey::Char('y'));
         assert_eq!(fs::read_to_string(&path).unwrap(), "keep\n!");
         assert!(!app.buffers[0].dirty());
 
@@ -12547,15 +12547,15 @@ mod tests {
         app.handle(CommandKey::Esc);
         app.handle(CommandKey::Char('q'));
         assert!(!app.quit());
-        assert!(rendered(&app).contains("y quit"));
-        assert!(rendered(&app).contains("! save&quit"));
+        assert!(rendered(&app).contains("y save&quit"));
+        assert!(rendered(&app).contains("! quit"));
         app.handle(CommandKey::Char('n'));
         assert!(!app.quit());
         assert!(app.text().contains('x'));
         app.handle(CommandKey::Char('q'));
         app.handle(CommandKey::Char('y'));
         assert!(app.quit());
-        assert_eq!(fs::read_to_string(&other).unwrap(), "two\n");
+        assert_eq!(fs::read_to_string(&other).unwrap(), "two\nx");
 
         let saved = root.join("saved.txt");
         fs::write(&saved, "base\n").unwrap();
@@ -12567,7 +12567,7 @@ mod tests {
         app.handle(CommandKey::Char('q'));
         app.handle(CommandKey::Char('!'));
         assert!(app.quit());
-        assert_eq!(fs::read_to_string(&saved).unwrap(), "base\nz");
+        assert_eq!(fs::read_to_string(&saved).unwrap(), "base\n");
         let _ = fs::remove_dir_all(&root);
     }
 

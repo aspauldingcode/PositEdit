@@ -161,6 +161,12 @@ impl FlipSwitcher {
     pub fn close(&mut self) {
         self.open = false;
         self.dirty = true;
+        // Drop scene buffers immediately — Flip scene can be ~400KB RGB.
+        self.placed = None;
+        self.scene_png.clear();
+        self.scene_png.shrink_to_fit();
+        self.scene_rgb.clear();
+        self.scene_rgb.shrink_to_fit();
     }
 }
 
@@ -554,6 +560,22 @@ mod tests {
         assert!((slot_of(0, 0.0, 3) - (-0.0)).abs() < 0.01 || slot_of(0, 0.0, 3).abs() < 0.6);
         let s1 = slot_of(1, 0.0, 3);
         assert!(s1 > 0.4 && s1 < 1.6, "{s1}");
+    }
+
+    #[test]
+    fn close_frees_scene_rgb_buffers() {
+        let mut sw = FlipSwitcher::default();
+        sw.open_at(0, 2);
+        sw.scene_rgb = vec![7u8; 12_000];
+        sw.scene_png = vec![9u8; 400];
+        sw.placed = Some((1, 2, 3, 4));
+        sw.close();
+        assert!(!sw.open);
+        assert!(sw.scene_rgb.is_empty());
+        assert!(sw.scene_png.is_empty());
+        assert_eq!(sw.scene_rgb.capacity(), 0);
+        assert_eq!(sw.scene_png.capacity(), 0);
+        assert!(sw.placed.is_none());
     }
 
     #[test]
