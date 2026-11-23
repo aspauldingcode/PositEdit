@@ -172,6 +172,8 @@ pub struct EditorApp {
     gutter: gutter::GutterState,
     /// Dragging the editor minimap or scrollbar (document scroll).
     edge_drag: Option<EdgeDrag>,
+    /// User preference: show the focused-editor minimap strip when width allows.
+    minimap_on: bool,
     /// Last Kitty RGB minimap upload key (revision/scroll/size).
     editor_minimap_key: Option<minimap_gfx::MinimapPaintKey>,
     /// Kitty image id bound to the editor minimap placeholders.
@@ -249,9 +251,9 @@ Editing
   rn toggles relative line numbers. Palette :42 / :+10 / :-5 jumps lines.
   Right edge: Kitty code minimap when Ghostty/kitty can draw it (glyph
   fallback otherwise). The minimap stays on the focused editor even when the
-  file fits. Text scrollbars use eighth-block thumbs and appear only when the
-  file needs motion. Click or drag either to scroll. On Kitty the minimap
-  replaces the text scrollbar.
+  file fits. :minimap (or Settings → m) toggles it. Text scrollbars use
+  eighth-block thumbs and appear only when the file needs motion. Click or
+  drag either to scroll. On Kitty the minimap replaces the text scrollbar.
   Click a panel to focus it. Only one of editor, terminal, agent, or file tree
   has the keyboard at a time. Hover cyan means click to focus.
   Click places the cursor. Drag selects. Double-click selects a word.
@@ -299,6 +301,7 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
         (":", "open the command line"),
         (":freeze", "freeze Canvas on the last frame"),
         (":thaw", "resume live Canvas frames"),
+        (":minimap", "toggle the editor minimap"),
         ("?", "open this guide"),
         ("h", "toggle mouse hover hints"),
         ("[", "focus the first buffer"),
@@ -1145,6 +1148,7 @@ impl EditorApp {
             last_pressure: PressureLevel::Normal,
             gutter: gutter::GutterState::default(),
             edge_drag: None,
+            minimap_on: true,
             editor_minimap_key: None,
             editor_minimap_id: None,
             minimap_frame_cache: RefCell::new(minimap_gfx::MinimapFrameCache::default()),
@@ -1688,6 +1692,7 @@ impl EditorApp {
                 self.canvas_frozen = false;
                 self.notice = "Canvas live".into();
             }
+            "minimap" | "mm" => self.toggle_minimap(),
             other if other.len() == 1 => {
                 let ch = other.chars().next().unwrap();
                 self.handle(CommandKey::Char(ch));
@@ -1708,6 +1713,37 @@ impl EditorApp {
         } else {
             "Canvas live".into()
         };
+    }
+
+    fn toggle_minimap(&mut self) {
+        self.minimap_on = !self.minimap_on;
+        if !self.minimap_on {
+            self.editor_minimap_key = None;
+        }
+        self.notice = if self.minimap_on {
+            "minimap on — :minimap again to hide".into()
+        } else {
+            "minimap off — :minimap to show".into()
+        };
+    }
+
+    /// Focused-tile edge chrome, respecting the user minimap preference.
+    fn edge_chrome(&self, tile_w: u16, line_count: usize, visible: usize) -> (u16, u16) {
+        let visible = visible.max(1);
+        if !self.minimap_on {
+            return (
+                0,
+                u16::from(minimap_gfx::needs_scroll(line_count, visible)),
+            );
+        }
+        minimap_gfx::edge_chrome(
+            tile_w,
+            minimap_gfx::host_is_kitty(),
+            self.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
+            self.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
+            line_count,
+            visible,
+        )
     }
 
     /// MCP / control-plane: synthetic mouse against the live frame (Canvas, editor, …).
@@ -1747,6 +1783,7 @@ impl EditorApp {
                 self.canvas_frozen = false;
                 self.notice = "Canvas live".into();
             }
+            "minimap" | "toggle-minimap" => self.toggle_minimap(),
             "palette" => self.handle(CommandKey::CtrlP),
             "fullscreen" | "toggle-fullscreen" => self.handle(CommandKey::CtrlW),
             "terminal.toggle" | "toggle-terminal" => {
@@ -2139,7 +2176,7 @@ impl EditorApp {
                     if !drag {
                         let inner = inset(chrome.editor);
                         let index = row.saturating_sub(inner.y) as usize;
-                        // Rows: 0 title, 1 sidebar … 7 canvas (no blank padding).
+                        // Rows: 0 title, 1 sidebar … 8 minimap (no blank padding).
                         if index == 1 {
                             self.sidebar = !self.sidebar;
                         } else if index == 2 {
@@ -2159,6 +2196,8 @@ impl EditorApp {
                             };
                         } else if index == 7 {
                             self.toggle_canvas_frozen();
+                        } else if index == 8 {
+                            self.toggle_minimap();
                         }
                     }
                     return;
@@ -2297,14 +2336,7 @@ impl EditorApp {
                 let line_count = self.focused().document.len_lines().max(1);
                 let gutter_w = self.gutter.width_for(line_count) as usize;
                 let visible = (tile_h.saturating_sub(2) as usize).max(1);
-                let (minimap_w, scroll_w) = minimap_gfx::edge_chrome(
-                    tile_w,
-                    minimap_gfx::host_is_kitty(),
-                    self.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
-                    self.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
-                    line_count,
-                    visible,
-                );
+                let (minimap_w, scroll_w) = self.edge_chrome(tile_w, line_count, visible);
                 let minimap_w = minimap_w as usize;
                 let scroll_w = scroll_w as usize;
                 let inner_w = tile_w.saturating_sub(2) as usize;
@@ -2501,7 +2533,7 @@ impl EditorApp {
                     if self.terminals.write_key(text.as_bytes()) {
                         self.notice = "pasted".to_string();
                     } else {
-                        self.notice = "terminal not ready".to_string();
+                        self.notice = "terminal not ready — press t to open one".into();
                     }
                     return;
                 }
@@ -3676,6 +3708,7 @@ impl EditorApp {
                     };
                 }
                 CommandKey::Char('z') => self.toggle_canvas_frozen(),
+                CommandKey::Char('m') => self.toggle_minimap(),
                 _ => {}
             },
             Overlay::Vim => {
@@ -4108,8 +4141,12 @@ impl EditorApp {
                         } else if matches!(raw.trim(), "thaw" | "canvas-thaw" | "unfreeze") {
                             self.canvas_frozen = false;
                             self.notice = "Canvas live".into();
+                        } else if matches!(raw.trim(), "minimap" | "mm") {
+                            self.toggle_minimap();
                         } else {
-                            self.notice = format!("unknown command: {raw}");
+                            self.notice = format!(
+                                "unknown :{raw} — F1 lists keys · try rn, freeze, thaw, minimap"
+                            );
                         }
                     }
                 }
@@ -4885,14 +4922,7 @@ impl EditorApp {
         let gutter_w = self.gutter.width_for(line_count);
         let visible = self.visible_rows().max(1);
         let line_count = self.focused().document.len_lines().max(1);
-        let (minimap_w, scroll_w) = minimap_gfx::edge_chrome(
-            tile_w,
-            minimap_gfx::host_is_kitty(),
-            self.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
-            self.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
-            line_count,
-            visible,
-        );
+        let (minimap_w, scroll_w) = self.edge_chrome(tile_w, line_count, visible);
         tile_w
             .saturating_sub(2)
             .saturating_sub(gutter_w)
@@ -5001,10 +5031,12 @@ impl EditorApp {
             }
             FormatOutcome::Unchanged => self.notice = "already formatted".to_string(),
             FormatOutcome::Unavailable { program } if program == "none" => {
-                self.notice = format!("no formatter for {language}");
+                self.notice =
+                    format!("no formatter for {language} — ff needs a language tool on PATH");
             }
             FormatOutcome::Unavailable { program } => {
-                self.notice = format!("formatter unavailable: {program}");
+                self.notice =
+                    format!("install `{program}` (or put it on PATH) to format {language}");
             }
             FormatOutcome::Failed { detail, .. } => {
                 self.notice = format!("format failed: {detail}");
@@ -6130,14 +6162,14 @@ fn agent_paragraph(app: &EditorApp, pane: Rect) -> Paragraph<'static> {
     let inner_w = pane.width.saturating_sub(2).max(1) as usize;
     let inner_h = pane.height.saturating_sub(2) as usize;
     let program = if app.agent_program.is_empty() {
-        "no CLI".to_string()
+        "no CLI — set IDE_AGENT or install claude/codex/agent".to_string()
     } else {
         app.agent_program.clone()
     };
     let draft = if app.agent_focused {
         format!("› {}", app.agent_draft)
     } else {
-        "click to ask".to_string()
+        "click to ask · Enter sends".to_string()
     };
     let program_lines = wrap_line(&program, inner_w);
     let draft_lines = wrap_line(&draft, inner_w);
@@ -6342,8 +6374,11 @@ fn settings_paragraph(app: &EditorApp) -> Paragraph<'static> {
                 "live"
             }
         ),
+        format!(
+            "minimap   {}    :minimap or m",
+            if app.minimap_on { "on" } else { "off" }
+        ),
         "Tab is lexical until a local model is installed.".to_string(),
-        "Minimap stays on when the focused tile is wide enough.".to_string(),
         "Esc or ; closes".to_string(),
     ];
     let lines = rows
@@ -6684,20 +6719,8 @@ fn paint_tile(
     let visible = tile_h.saturating_sub(2) as usize;
     let line_count = buffer.document.len_lines().max(1);
     let gutter_w = app.gutter.width_for(line_count);
-    let kitty_minimap = minimap_gfx::host_is_kitty();
-    let pressure_crit =
-        app.last_pressure.is_critical() && !minimap_gfx::force_minimap();
-    let pressure_warn =
-        app.last_pressure.is_elevated() && !minimap_gfx::force_minimap();
     let (minimap_w, scroll_w) = if index == app.focus {
-        minimap_gfx::edge_chrome(
-            tile_w,
-            kitty_minimap,
-            pressure_crit,
-            pressure_warn,
-            line_count,
-            visible.max(1),
-        )
+        app.edge_chrome(tile_w, line_count, visible.max(1))
     } else {
         // Unfocused tiles: text scrollbar only when scrollable.
         if minimap_gfx::needs_scroll(line_count, visible.max(1)) {
@@ -6790,7 +6813,7 @@ fn paint_tile(
             .saturating_add(inner.width.saturating_sub(minimap_w + scroll_w));
         let theme = app.minimap_theme;
         let underlay_bg = Color::Rgb(theme.bg.0, theme.bg.1, theme.bg.2);
-        if kitty_minimap {
+        if minimap_gfx::host_is_kitty() {
             // Blank theme strip only — U=1 placeholders are written once after
             // PNG transmit (embedding them in ratatui duplicated/smeared the image).
             let style = Style::default().bg(underlay_bg).fg(underlay_bg);
@@ -8235,14 +8258,7 @@ fn editor_chrome_hover(
     let line_count = app.buffers.get(app.focus)?.document.len_lines().max(1);
     let gutter_w = app.gutter.width_for(line_count);
     let visible = tile.height.saturating_sub(2) as usize;
-    let (minimap_w, scroll_w) = minimap_gfx::edge_chrome(
-        inner_w,
-        minimap_gfx::host_is_kitty(),
-        app.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
-        app.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
-        line_count,
-        visible.max(1),
-    );
+    let (minimap_w, scroll_w) = app.edge_chrome(inner_w, line_count, visible.max(1));
     if local_x < gutter_w {
         return Some(match gutter::hit(local_x, gutter_w) {
             Some(gutter::GutterHit::Breakpoint) => "Click to toggle breakpoint",
@@ -8552,14 +8568,7 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
     let line_count = app.focused().document.len_lines().max(1);
     let visible = (tile_h.saturating_sub(2) as usize).max(1);
     let kitty = minimap_gfx::host_is_kitty();
-    let (cols, scroll_w) = minimap_gfx::edge_chrome(
-        tile_w,
-        kitty,
-        app.last_pressure.is_critical() && !minimap_gfx::force_minimap(),
-        app.last_pressure.is_elevated() && !minimap_gfx::force_minimap(),
-        line_count,
-        visible,
-    );
+    let (cols, scroll_w) = app.edge_chrome(tile_w, line_count, visible);
     if cols < 2 || tile_h < 4 || !kitty {
         return None;
     }
@@ -11375,6 +11384,42 @@ mod tests {
         assert!(
             screen.contains("Minimap") || screen.contains("minimap"),
             "{screen}"
+        );
+    }
+
+    #[test]
+    fn palette_minimap_toggles_edge_chrome() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(100, 30);
+        assert!(app.minimap_on);
+        let (on_mm, _) = app.edge_chrome(80, 40, 20);
+        assert!(on_mm > 0, "minimap should reserve columns when on");
+        app.palette = true;
+        app.query = "minimap".into();
+        app.handle(CommandKey::Enter);
+        assert!(!app.minimap_on, "toggle should turn minimap off");
+        assert!(app.notice.contains("off"), "{}", app.notice);
+        let (off_mm, off_sb) = app.edge_chrome(80, 40, 20);
+        assert_eq!(off_mm, 0);
+        assert_eq!(off_sb, 1, "scrollbar remains when content scrolls");
+        app.palette = true;
+        app.query = "mm".into();
+        app.handle(CommandKey::Enter);
+        assert!(app.minimap_on);
+        assert!(app.notice.contains("on"), "{}", app.notice);
+    }
+
+    #[test]
+    fn unknown_palette_command_points_at_help() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(80, 24);
+        app.palette = true;
+        app.query = "definitely-not-a-command".into();
+        app.handle(CommandKey::Enter);
+        assert!(
+            app.notice.contains("unknown") && app.notice.contains("F1"),
+            "{}",
+            app.notice
         );
     }
 
