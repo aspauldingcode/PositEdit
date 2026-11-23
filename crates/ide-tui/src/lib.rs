@@ -6158,9 +6158,14 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
 fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
     if app.tree_query.is_some() {
         let width = app.tree_rect().width.saturating_sub(2) as usize;
+        let light = app.minimap_theme.is_light();
         let mut lines = vec![Line::styled(
             format!("/{}", app.tree_query.as_deref().unwrap_or("")),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(if light {
+                Color::Rgb(0x9a, 0x67, 0x00)
+            } else {
+                Color::Yellow
+            }),
         )];
         for (index, hit) in app.tree_hits.iter().enumerate() {
             lines.push(finder::matched_line(
@@ -6168,6 +6173,7 @@ fn tree_paragraph(app: &EditorApp) -> Paragraph<'static> {
                 &hit.positions,
                 index == app.tree_search_cursor,
                 width.max(1),
+                light,
             ));
         }
         if app.tree_hits.is_empty() {
@@ -6666,6 +6672,7 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
         FinderKind::Buffers => "Buffers",
     };
     let width = app.width.saturating_sub(4) as usize;
+    let light = app.minimap_theme.is_light();
     let mut lines = vec![Line::styled(
         format!("> {}", finder.query),
         Style::default().fg(Color::Cyan),
@@ -6678,6 +6685,7 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
                     &hit.positions,
                     index == finder.cursor,
                     width.max(1),
+                    light,
                 ));
             }
         }
@@ -6692,6 +6700,7 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
                     offset + hit.end,
                     index == finder.cursor,
                     width.max(1),
+                    light,
                 ));
             }
         }
@@ -6759,6 +6768,9 @@ fn paint_spatial(frame: &mut Frame, app: &EditorApp, area: Rect) {
                     .fg(Color::Black)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
+            } else if app.minimap_theme.is_light() {
+                // White-on-cream spatial rows were unreadable on Ghostty default.
+                Style::default().fg(Color::Rgb(0x1a, 0x1a, 0x1a))
             } else {
                 Style::default().fg(Color::White)
             };
@@ -11541,6 +11553,21 @@ mod tests {
             screen.contains("Minimap") || screen.contains("minimap"),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn spatial_rows_stay_readable_on_light_hosts() {
+        let mut app = EditorApp::new("hi\n");
+        app.minimap_theme = minimap_gfx::MinimapTheme::light();
+        app.spatial_lines = vec!["alpha".into(), "beta".into()];
+        app.spatial_cursor = 0;
+        app.spatial.active_mode = SpatialMode::Overview;
+        app.note_frame(80, 24);
+        let screen = rendered_at(&app, 80, 24);
+        assert!(screen.contains("alpha") || screen.contains("Overview"), "{screen}");
+        // Non-selected ink must not be ANSI White on cream.
+        let light_fg = Color::Rgb(0x1a, 0x1a, 0x1a);
+        assert_ne!(light_fg, Color::White);
     }
 
     #[test]
