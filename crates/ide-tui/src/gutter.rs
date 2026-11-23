@@ -70,6 +70,9 @@ impl GutterState {
     }
 
     /// Render one gutter row for `line` (1-based) with caret on `caret_line` (1-based).
+    ///
+    /// `light` selects ink that stays readable on cream hosts (White-on-cream
+    /// caret numbers were effectively invisible on Ghostty's default theme).
     pub fn line_spans(
         &self,
         path: Option<&Path>,
@@ -77,6 +80,7 @@ impl GutterState {
         caret_line: usize,
         line_count: usize,
         width: u16,
+        light: bool,
     ) -> Vec<Span<'static>> {
         let digits = ((line_count.max(1) as f32).log10().floor() as usize) + 1;
         let digits = digits.max(2);
@@ -91,8 +95,22 @@ impl GutterState {
             Span::raw(" ")
         };
         let git = match self.git_mark(path, line) {
-            GitMark::Added => Span::styled("┃", Style::default().fg(Color::Green)),
-            GitMark::Modified => Span::styled("┃", Style::default().fg(Color::Yellow)),
+            GitMark::Added => Span::styled(
+                "┃",
+                Style::default().fg(if light {
+                    Color::Rgb(0x2e, 0x7d, 0x32)
+                } else {
+                    Color::Green
+                }),
+            ),
+            GitMark::Modified => Span::styled(
+                "┃",
+                Style::default().fg(if light {
+                    Color::Rgb(0xb5, 0x86, 0x00)
+                } else {
+                    Color::Yellow
+                }),
+            ),
             GitMark::Deleted => Span::styled("▁", Style::default().fg(Color::Red)),
             GitMark::None => Span::raw(" "),
         };
@@ -104,10 +122,18 @@ impl GutterState {
         };
         let num_style = if line == caret_line {
             Style::default()
-                .fg(Color::White)
+                .fg(if light {
+                    Color::Rgb(0x1a, 0x1a, 0x1a)
+                } else {
+                    Color::White
+                })
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(if light {
+                Color::Rgb(0x6e, 0x6a, 0x5e)
+            } else {
+                Color::DarkGray
+            })
         };
         let mut spans = vec![bp, git, Span::raw(" "), Span::styled(number, num_style), Span::raw(" ")];
         let used = 1 + 1 + 1 + digits + 1;
@@ -208,12 +234,28 @@ mod tests {
     fn relative_numbers_keep_absolute_on_caret_line() {
         let mut state = GutterState::default();
         state.relative_numbers = true;
-        let spans = state.line_spans(None, 5, 5, 99, 8);
+        let spans = state.line_spans(None, 5, 5, 99, 8, false);
         let joined: String = spans.iter().map(|s| s.content.clone()).collect();
         assert!(joined.contains('5'), "{joined}");
-        let spans = state.line_spans(None, 8, 5, 99, 8);
+        let spans = state.line_spans(None, 8, 5, 99, 8, false);
         let joined: String = spans.iter().map(|s| s.content.clone()).collect();
         assert!(joined.contains('3'), "{joined}");
+    }
+
+    #[test]
+    fn caret_line_ink_stays_visible_on_light_hosts() {
+        let state = GutterState::default();
+        let light = state.line_spans(None, 3, 3, 20, 8, true);
+        let dark = state.line_spans(None, 3, 3, 20, 8, false);
+        let light_num = light.iter().find(|s| s.content.contains('3')).expect("num");
+        let dark_num = dark.iter().find(|s| s.content.contains('3')).expect("num");
+        assert_eq!(
+            light_num.style.fg,
+            Some(Color::Rgb(0x1a, 0x1a, 0x1a)),
+            "cream hosts must not use White caret numbers"
+        );
+        assert_eq!(dark_num.style.fg, Some(Color::White));
+        assert_ne!(light_num.style.fg, dark_num.style.fg);
     }
 
     #[test]

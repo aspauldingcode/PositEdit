@@ -6883,9 +6883,14 @@ fn paint_tile(
         if line > line_count {
             break;
         }
-        let spans = app
-            .gutter
-            .line_spans(path, line, caret_line, line_count, gutter_w);
+        let spans = app.gutter.line_spans(
+            path,
+            line,
+            caret_line,
+            line_count,
+            gutter_w,
+            app.minimap_theme.is_light(),
+        );
         let mut x = inner.x;
         for span in spans {
             let content = span.content.clone();
@@ -8650,6 +8655,8 @@ fn present(
     // Prefer Kitty whenever TERM/TERM_PROGRAM/Ghostty say so — glyph minimap
     // is only the non-Kitty fallback.
     app.graphics.prefer_kitty_from_env();
+    // Refresh before ratatui draw so gutter/scrollbar match the Kitty strip.
+    app.minimap_theme = minimap_gfx::terminal_theme();
     // One synchronized frame: ratatui cells + Kitty placeholder swap together so
     // Ghostty never paints a blank underlay between draw and image bind.
     execute!(stdout(), BeginSynchronizedUpdate)?;
