@@ -349,7 +349,7 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
         ("t", "toggle the terminal"),
         ("Ctrl-Alt-T", "toggle local Tab completion"),
         ("zo", "spatial overview"),
-        ("zl", "ephemeral lens"),
+        ("zl", "symbols outline — Enter jumps"),
         ("zn", "structural edit preview"),
         ("zt", "execution timeline"),
         ("zi", "change impact"),
@@ -1017,6 +1017,82 @@ fn parse_line_jump(raw: &str) -> Option<LineJump> {
         return Some(LineJump::Absolute(n.max(1)));
     }
     None
+}
+
+/// Lightweight buffer outline for `zl` — no LSP required.
+fn outline_symbols(text: &str) -> Vec<(usize, String)> {
+    const KINDS: &[(&str, &str)] = &[
+        ("fn ", "fn"),
+        ("def ", "def"),
+        ("struct ", "struct"),
+        ("enum ", "enum"),
+        ("trait ", "trait"),
+        ("impl ", "impl"),
+        ("class ", "class"),
+        ("interface ", "interface"),
+        ("type ", "type"),
+        ("func ", "func"),
+        ("function ", "function"),
+        ("mod ", "mod"),
+    ];
+    let mut out = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("/*")
+        {
+            continue;
+        }
+        let mut body = trimmed;
+        for prefix in [
+            "pub(crate) ",
+            "pub ",
+            "async ",
+            "export ",
+            "static ",
+            "private ",
+            "protected ",
+            "public ",
+        ] {
+            if let Some(rest) = body.strip_prefix(prefix) {
+                body = rest;
+            }
+        }
+        for &(prefix, label) in KINDS {
+            let Some(rest) = body.strip_prefix(prefix) else {
+                continue;
+            };
+            let name = rest
+                .split(|ch: char| {
+                    ch == '(' || ch == '{' || ch == '<' || ch == ':' || ch == '!' || ch.is_whitespace()
+                })
+                .next()
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() && label != "impl" {
+                break;
+            }
+            let shown = if name.is_empty() {
+                format!("{label} …")
+            } else {
+                format!("{label} {name}")
+            };
+            out.push((index + 1, shown));
+            break;
+        }
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    out
+}
+
+fn parse_outline_line(row: &str) -> Option<usize> {
+    let token = row.split_whitespace().next()?;
+    let line: usize = token.parse().ok()?;
+    (line >= 1).then_some(line)
 }
 
 /// First non-whitespace glyph (+ editor syntax RGB) for each minimap sample line.
@@ -4043,6 +4119,27 @@ impl EditorApp {
             &self.spatial_context(),
         );
         self.apply_spatial_outcome(outcome);
+        // Host fills the stub lens with a lightweight outline from the buffer.
+        if self.spatial.active_mode == SpatialMode::Lens {
+            let symbols = outline_symbols(&self.focused().text());
+            if symbols.is_empty() {
+                self.spatial_lines = vec![
+                    "no symbols here — add a fn / struct / class / def".into(),
+                    "Esc closes".into(),
+                ];
+                self.notice = "symbols empty — Esc closes".into();
+            } else {
+                self.spatial_lines = symbols
+                    .into_iter()
+                    .map(|(line, label)| format!("{line:>4}  {label}"))
+                    .collect();
+                self.notice = format!(
+                    "symbols · {} · Enter jumps · Esc closes",
+                    self.spatial_lines.len()
+                );
+            }
+            self.spatial_cursor = 0;
+        }
     }
 
     fn spatial_structural(&mut self, op: StructuralOp) {
@@ -4128,6 +4225,20 @@ impl EditorApp {
                             self.apply_spatial_outcome(outcome);
                         }
                     }
+                }
+                SpatialMode::Lens => {
+                    let Some(row) = self.spatial_lines.get(self.spatial_cursor) else {
+                        return;
+                    };
+                    let Some(line) = parse_outline_line(row) else {
+                        return;
+                    };
+                    let outcome = self
+                        .spatial
+                        .dispatch(SpatialAction::CloseSpatial, &self.spatial_context());
+                    self.apply_spatial_outcome(outcome);
+                    self.jump_lines(LineJump::Absolute(line));
+                    self.notice = format!("jumped to line {line}");
                 }
                 SpatialMode::Structural => {
                     let outcome = self
@@ -6808,7 +6919,7 @@ fn paint_spatial(frame: &mut Frame, app: &EditorApp, area: Rect) {
     }
     let title = match app.spatial.active_mode {
         SpatialMode::Overview => "Spatial overview",
-        SpatialMode::Lens => "Lens",
+        SpatialMode::Lens => "Symbols",
         SpatialMode::Timeline => "Timeline",
         SpatialMode::Impact => "Change impact",
         SpatialMode::Structural => "Structural edit",
@@ -11977,6 +12088,41 @@ mod tests {
         assert!(app.spatial_lines[0].contains("RecordedReplay"));
         app.handle(CommandKey::Esc);
         assert_eq!(app.spatial.active_mode, SpatialMode::Idle);
+    }
+
+    #[test]
+    fn symbols_lens_lists_definitions_and_enter_jumps() {
+        let mut app = EditorApp::new(
+            "// skip\nfn alpha() {}\n\npub struct Beta;\nimpl Beta {}\nfn gamma() {}\n",
+        );
+        app.set_language("rust");
+        app.note_frame(80, 24);
+        app.handle(CommandKey::Char('z'));
+        app.handle(CommandKey::Char('l'));
+        assert_eq!(app.spatial.active_mode, SpatialMode::Lens);
+        assert!(
+            app.spatial_lines.iter().any(|l| l.contains("fn alpha")),
+            "{:?}",
+            app.spatial_lines
+        );
+        assert!(
+            app.spatial_lines.iter().any(|l| l.contains("struct Beta")),
+            "{:?}",
+            app.spatial_lines
+        );
+        // Select gamma (last fn) and jump.
+        app.spatial_cursor = app
+            .spatial_lines
+            .iter()
+            .position(|l| l.contains("fn gamma"))
+            .expect("gamma");
+        app.handle(CommandKey::Enter);
+        assert_eq!(app.spatial.active_mode, SpatialMode::Idle);
+        let (line, _) = app
+            .focused()
+            .with_text(|text| line_col(text, app.focused().cursor));
+        assert_eq!(line + 1, 6, "gamma is on line 6");
+        assert!(app.notice.contains("jumped"), "{}", app.notice);
     }
 
     #[test]
