@@ -1810,6 +1810,10 @@ impl EditorApp {
         self.kitty_graphics = !self.kitty_graphics;
         persist_kitty_graphics(&self.workspace, self.kitty_graphics);
         graphics::set_kitty_allowed(self.kitty_graphics);
+        if !self.kitty_graphics {
+            self.preview_pool.clear();
+            self.flip.placed = None;
+        }
         self.graphics.refresh_kitty_policy();
         // Drop any bound Kitty surfaces so fallbacks paint cleanly.
         self.editor_minimap_id = None;
@@ -2389,6 +2393,10 @@ impl EditorApp {
             buffer.document.apply_pressure(level);
         }
         self.terminals.apply_pressure(level);
+        // Drop Flip/minimap preview RGB under jetsam-class pressure.
+        if level.is_critical() {
+            self.preview_pool.clear();
+        }
     }
 
     pub fn handle(&mut self, key: CommandKey) {
@@ -3228,6 +3236,10 @@ impl EditorApp {
     }
 
     fn buffer_strip_hit(&self, column: u16, row: u16) -> Option<usize> {
+        // Flip owns the tile area — strip clicks must not steal focus under the stack.
+        if self.flip.open {
+            return None;
+        }
         let (_, strip) = self.content_tiles_and_strip(
             self.frame_chrome(Rect::new(0, 0, self.width, self.height))
                 .content,
@@ -3314,8 +3326,12 @@ impl EditorApp {
     }
 
     /// Snapshot highlight cells and enqueue headless Kitty Flip previews (never blocks).
+    /// Only while Flip is open — idle pre-warm of every buffer burned CPU/RAM on laptops.
     fn schedule_flip_previews(&self) {
-        if cfg!(test) || !minimap_gfx::host_is_kitty() {
+        if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() {
+            return;
+        }
+        if !self.flip.open || self.last_pressure.is_critical() {
             return;
         }
         for index in 0..self.buffers.len() {
@@ -3329,23 +3345,33 @@ impl EditorApp {
         }
     }
 
-    /// Sync-raster the selected card + neighbours so the first Flip frame has
-    /// real syntax glyphs (shared Arc with the background pool / minimap).
+    /// Sync-raster the selected card (+ neighbours when RAM allows) so the first
+    /// Flip frame has real syntax glyphs (shared Arc with the background pool).
     fn warm_flip_previews_sync(&self) {
-        if cfg!(test) || !minimap_gfx::host_is_kitty() || self.buffers.is_empty() {
+        if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() || self.buffers.is_empty()
+        {
             return;
         }
         let count = self.buffers.len();
         let selected = self.flip.selected.min(count - 1);
-        for delta in [-2i32, -1, 0, 1, 2] {
+        // Urgent/Critical: only the front card. Warning: ±1. Normal: ±2.
+        let radius = if self.last_pressure.is_critical() {
+            0
+        } else if self.last_pressure.is_elevated() {
+            1
+        } else {
+            2
+        };
+        for delta in -radius..=radius {
             let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
             let Some(job) = self.flip_preview_job(index) else {
                 continue;
             };
             let _ = self.preview_pool.get_or_render(job);
         }
-        // Remaining buffers stay async.
-        self.schedule_flip_previews();
+        if !self.last_pressure.is_critical() {
+            self.schedule_flip_previews();
+        }
     }
 
     fn flip_scene_theme(&self) -> flip3d::SceneTheme {
@@ -7029,8 +7055,17 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         .filter(|count| *count > 0)
         .map(|count| format!("  sel {count}"))
         .unwrap_or_default();
+    let gfx = if app.kitty_graphics {
+        ""
+    } else {
+        "  gfx off"
+    };
+    let pressure = match app.last_pressure {
+        PressureLevel::Normal => String::new(),
+        other => format!("  mem {other:?}"),
+    };
     let status_body = format!(
-        "   {gaze}{selected}  {axis}  {mode}  {}  rev {}  {}  chars {}{pending}{notice}",
+        "   {gaze}{selected}  {axis}  {mode}{gfx}{pressure}  {}  rev {}  {}  chars {}{pending}{notice}",
         app.focused().name,
         app.focused().document.revision(),
         app.language(),
@@ -7073,7 +7108,10 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
         paint_tab(frame, app, status_rect);
     }
     paint_seam_handles(frame, app);
-    paint_buffer_strip(frame, app);
+    // Skip strip paint under Flip — saves a present pass and avoids dead hit targets.
+    if !app.flip.open {
+        paint_buffer_strip(frame, app);
+    }
     if app.flip.open {
         paint_flip_switcher(frame, app);
     }
@@ -9299,8 +9337,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 canvas_dirty |= surface.poll_frame();
             }
         }
-        // Background Flip/minimap syntax rasters — never block the UI thread.
-        if app.flip.open || (minimap_gfx::host_is_kitty() && app.buffers.len() >= 2) {
+        // Flip rasters only while the switcher is open (idle pre-warm was a CPU tax).
+        if app.flip.open {
             app.schedule_flip_previews();
         }
         if app.preview_pool.take_ready() {
@@ -11412,6 +11450,73 @@ mod tests {
         assert!(!app.terminals.open);
         assert_eq!(app.terminals.len(), 0);
         assert!(app.canvas_surfaces.is_empty());
+    }
+
+    #[test]
+    fn flip_previews_idle_gate_and_pressure_clear_pool() {
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        app.note_frame(120, 40);
+        // Idle (Flip closed): schedule is a no-op even with 2 buffers.
+        app.schedule_flip_previews();
+        assert!(!app.flip.open);
+        // Kitty graphics off: warm must not run.
+        app.kitty_graphics = false;
+        graphics::set_kitty_allowed(false);
+        app.open_flip_switcher();
+        assert!(app.flip.open);
+        app.warm_flip_previews_sync();
+        // Urgent clears cached Flip RGB so jetsam hosts drop the working set.
+        app.kitty_graphics = true;
+        graphics::set_kitty_allowed(true);
+        let key = minimap_gfx::preview_key(0, 1, app.minimap_theme.fingerprint, 8, 8);
+        app.preview_pool.request(minimap_gfx::PreviewJob {
+            key,
+            theme: app.minimap_theme,
+            width: 8,
+            height: 8,
+            lines: vec![vec![('x', (1, 2, 3))]],
+        });
+        for _ in 0..40 {
+            if app.preview_pool.get(key).is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.force_memory_pressure(PressureLevel::Urgent);
+        assert!(
+            app.preview_pool.get(key).is_none(),
+            "Urgent must drop PreviewPool RGB"
+        );
+        // Strip hits ignored while Flip owns the tiles.
+        app.note_frame(160, 40);
+        let (_, strip) = app.content_tiles_and_strip(
+            app.frame_chrome(Rect::new(0, 0, app.width, app.height))
+                .content,
+        );
+        if strip.height > 0 {
+            assert!(app.buffer_strip_hit(strip.x + 1, strip.y).is_none());
+        }
+        graphics::set_kitty_allowed(true);
+    }
+
+    #[test]
+    fn status_marks_gfx_off_and_memory_pressure() {
+        let mut app = EditorApp::new("file\n");
+        app.note_frame(120, 40);
+        app.kitty_graphics = false;
+        app.force_memory_pressure(PressureLevel::Warning);
+        let screen = rendered(&app);
+        assert!(
+            screen.contains("gfx off"),
+            "status should show gfx off: {}",
+            screen.chars().rev().take(200).collect::<String>().chars().rev().collect::<String>()
+        );
+        assert!(
+            screen.contains("mem Warning") || screen.contains("Warning"),
+            "status should surface pressure: {}",
+            screen.chars().rev().take(240).collect::<String>().chars().rev().collect::<String>()
+        );
     }
 
     #[test]
