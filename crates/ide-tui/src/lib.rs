@@ -1261,6 +1261,11 @@ impl EditorApp {
             let body = format!("{{\"enabled\":{}}}\n", self.tab_enabled);
             let _ = std::fs::write(dir.join("local-tab.json"), body);
         }
+        self.notice = if self.tab_enabled {
+            "Tab completion on — lexical until a local model is installed".into()
+        } else {
+            "Tab completion off — Ctrl-Alt-T to enable".into()
+        };
     }
 
     fn set_hover(&mut self, column: u16, row: u16) {
@@ -1507,7 +1512,7 @@ impl EditorApp {
         self.canvas_chrome_dirty.set(true);
         if self.runtime_dock.is_none() {
             self.runtime_focused = false;
-            self.notice = "canvas closed".into();
+            self.notice = "canvas closed — 6 Browser · 7 Phone".into();
         } else {
             self.notice = format!(
                 "{} canvas",
@@ -1990,7 +1995,9 @@ impl EditorApp {
                 if self.notifications.len() > 8 {
                     self.notifications.truncate(8);
                 }
-                self.notice = format!("memory pressure {:?}", level);
+                self.notice = format!(
+                    "memory pressure {level:?} — close Canvas (x) or hide :minimap if stuttering"
+                );
                 return true;
             }
         }
@@ -2716,7 +2723,7 @@ impl EditorApp {
             self.canvas_painted_size = None;
             self.canvas_image_id = None;
             self.canvas_resize = false;
-            self.notice = "canvas closed".into();
+            self.notice = "canvas closed — 6 Browser · 7 Phone".into();
             return;
         }
         self.runtime_width = Some(width.clamp(28, max));
@@ -2837,7 +2844,7 @@ impl EditorApp {
         self.terminals.resize(cols, rows);
         let closed = self.terminals.drain();
         if closed > 0 {
-            self.notice = "terminal closed".to_string();
+            self.notice = "terminal closed — t to reopen".into();
         }
         if let Err(detail) = self.terminals.ensure(&self.workspace, cols, rows) {
             self.notice = format!("terminal: {detail}");
@@ -4248,7 +4255,7 @@ impl EditorApp {
             self.focus = self.buffers.len() - 1;
         }
         self.target = self.focus as f32 * self.stride as f32;
-        self.notice = "closed".to_string();
+        self.notice = "buffer closed — o opens files · ll finds by name".into();
     }
 
     fn relocate(&mut self, to: usize) {
@@ -7722,7 +7729,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             Some(server)
         }
         Err(error) => {
-            app.notice = format!("mcp control offline: {error}");
+            app.notice = format!("mcp control offline: {error} — editor still works");
             None
         }
     };
@@ -11475,6 +11482,29 @@ mod tests {
         assert!(app.pending_plan.is_none());
         assert!(
             app.notice.contains("cancelled") && app.notice.contains('1'),
+            "{}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn closing_a_buffer_and_tab_toggle_explain_themselves() {
+        let mut app = EditorApp::new("keep\n");
+        app.add_buffer("drop", "drop\n");
+        app.note_frame(100, 30);
+        app.handle(CommandKey::Right);
+        app.handle(CommandKey::Char('w'));
+        assert_eq!(app.buffers.len(), 1);
+        assert!(
+            app.notice.contains("buffer closed") && app.notice.contains('o'),
+            "{}",
+            app.notice
+        );
+        let before = app.tab_enabled;
+        app.toggle_tab();
+        assert_ne!(app.tab_enabled, before);
+        assert!(
+            app.notice.contains("Tab completion"),
             "{}",
             app.notice
         );
