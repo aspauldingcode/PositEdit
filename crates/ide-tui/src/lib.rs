@@ -2396,6 +2396,14 @@ impl EditorApp {
         // Drop Flip/minimap preview RGB under jetsam-class pressure.
         if level.is_critical() {
             self.preview_pool.clear();
+            self.minimap_frame_cache.borrow_mut().clear();
+            // Drop highlight spans on background buffers (largest retained Vec).
+            let focus = self.focus;
+            for (index, buffer) in self.buffers.iter().enumerate() {
+                if index != focus {
+                    buffer.highlight_cache.borrow_mut().take();
+                }
+            }
         }
     }
 
@@ -9266,7 +9274,9 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(100))
         } else {
-            Duration::from_millis(100)
+            // Quiet editor: wake less often so idle CPU stays near zero on
+            // constrained hosts (budget: near-zero idle).
+            Duration::from_millis(250)
         };
 
         let mut raw = Vec::new();
@@ -10352,10 +10362,17 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
 }
 
 fn refresh_minimap_theme(app: &mut EditorApp) {
+    // Dirty (focus/scheme change): probe soon. Idle: 2s — OSC shares stdin and
+    // a 500ms cadence was measurable idle CPU on Ghostty.
+    let interval = if app.minimap_theme_dirty {
+        Duration::from_millis(200)
+    } else {
+        Duration::from_secs(2)
+    };
     let due = app.minimap_theme_dirty
         || app
             .minimap_theme_probed_at
-            .is_none_or(|at| at.elapsed() >= Duration::from_millis(500));
+            .is_none_or(|at| at.elapsed() >= interval);
     if !due {
         return;
     }
