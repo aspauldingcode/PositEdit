@@ -2827,9 +2827,9 @@ impl EditorApp {
     fn toggle_terminal(&mut self) {
         self.terminals.toggle();
         self.notice = if self.terminals.open {
-            "terminal on".to_string()
+            "terminal on — + opens a shell".into()
         } else {
-            "terminal off".to_string()
+            "terminal off — t to reopen".into()
         };
     }
 
@@ -3116,9 +3116,9 @@ impl EditorApp {
             terminal::Click::Toggle => {
                 self.terminals.clear_selection();
                 self.notice = if self.terminals.open {
-                    "terminal on".to_string()
+                    "terminal on — + opens a shell".into()
                 } else {
-                    "terminal off".to_string()
+                    "terminal off — t to reopen".into()
                 };
                 if self.terminals.open {
                     self.focus_pane(PaneFocus::Terminal);
@@ -4070,7 +4070,8 @@ impl EditorApp {
 
     fn spatial_save_snapshot(&mut self) {
         if ide_spatial::SnapshotStore::opt_out(&self.workspace) {
-            self.notice = "spatial snapshots opted out".into();
+            self.notice =
+                "spatial snapshots opted out — remove .posit/no-spatial-snapshots to enable".into();
             return;
         }
         let panes = self
@@ -4559,7 +4560,7 @@ impl EditorApp {
                 self.pending_plan = None;
                 let text = self.dlc_text(&script, &["config".into()]);
                 self.show_output("*workbench*", &text);
-                self.notice = "configuration preview".to_string();
+                self.notice = "configuration preview — see *workbench* · : dlc trust to apply".into();
             }
             WorkbenchAction::Build => self.plan_action(&script, "build"),
             WorkbenchAction::Run => self.plan_action(&script, "run"),
@@ -9793,9 +9794,18 @@ mod tests {
         assert_eq!(app.terminal_rect().height, 6);
         app.handle(CommandKey::Char('t'));
         assert_eq!(app.terminal_rect().height, 1);
-        assert_eq!(app.notice(), "terminal off");
+        assert!(
+            app.notice().contains("terminal off"),
+            "{}",
+            app.notice()
+        );
         app.handle(CommandKey::Char('t'));
         assert_eq!(app.terminal_rect().height, 6);
+        assert!(
+            app.notice().contains("terminal on"),
+            "{}",
+            app.notice()
+        );
         let rect = app.terminal_rect();
         let screen = rendered_at(&app, 80, 24);
         assert!(screen.contains("Terminal") || screen.contains("terminal"));
