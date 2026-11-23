@@ -84,13 +84,21 @@ pub struct MinimapLayout {
     pub slider_height_px: u32,
 }
 
-/// Shared syntax hues — must stay identical to `token_style` in `lib.rs`
-/// so the Kitty minimap matches the editor 1:1 (forced `Color::Rgb`).
+/// Dark-host syntax hues (One Dark–ish). Editor `token_style` and the Kitty
+/// strip both read these via `MinimapTheme` so they stay 1:1.
 pub const SYNTAX_KEYWORD: (u8, u8, u8) = (0xc6, 0x78, 0xdd);
 pub const SYNTAX_COMMENT: (u8, u8, u8) = (0xe5, 0xc0, 0x7b);
 pub const SYNTAX_STRING: (u8, u8, u8) = (0x98, 0xc3, 0x79);
 pub const SYNTAX_TYPE: (u8, u8, u8) = (0x56, 0xb6, 0xc2);
 pub const SYNTAX_FUNCTION: (u8, u8, u8) = (0x61, 0xaf, 0xef);
+
+/// Light-host syntax hues — darker cousins of the dark set. The One Dark pastels
+/// wash out on Ghostty cream (~1.5:1 for comments); these clear ~4.5:1 on cream.
+pub const SYNTAX_LIGHT_KEYWORD: (u8, u8, u8) = (0x7a, 0x3e, 0x9d);
+pub const SYNTAX_LIGHT_COMMENT: (u8, u8, u8) = (0x8a, 0x6d, 0x3b);
+pub const SYNTAX_LIGHT_STRING: (u8, u8, u8) = (0x3d, 0x7a, 0x37);
+pub const SYNTAX_LIGHT_TYPE: (u8, u8, u8) = (0x1a, 0x7a, 0x85);
+pub const SYNTAX_LIGHT_FUNCTION: (u8, u8, u8) = (0x1a, 0x6f, 0xb5);
 
 /// Terminal-derived palette for the RGB strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,11 +122,11 @@ impl MinimapTheme {
             id: 3,
             bg: (250, 245, 230),
             fg: (70, 80, 55),
-            keyword: SYNTAX_KEYWORD,
-            comment: SYNTAX_COMMENT,
-            string: SYNTAX_STRING,
-            ty: SYNTAX_TYPE,
-            function: SYNTAX_FUNCTION,
+            keyword: SYNTAX_LIGHT_KEYWORD,
+            comment: SYNTAX_LIGHT_COMMENT,
+            string: SYNTAX_LIGHT_STRING,
+            ty: SYNTAX_LIGHT_TYPE,
+            function: SYNTAX_LIGHT_FUNCTION,
             view_delta: -18,
         }
     }

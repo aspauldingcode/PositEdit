@@ -6857,7 +6857,7 @@ fn paint_tile(
             .flatten(),
         buffer.scroll,
         visible.max(1).saturating_add(1),
-        app.minimap_theme.is_light(),
+        app.minimap_theme,
     );
     let max_x = text
         .lines
@@ -7387,8 +7387,9 @@ fn highlighted_window(
     ghost: Option<&Ghost>,
     first_line: usize,
     line_count: usize,
-    light: bool,
+    theme: minimap_gfx::MinimapTheme,
 ) -> Text<'static> {
+    let light = theme.is_light();
     // Populate caches without cloning the full document / span vec into paint.
     buffer.ensure_highlight_cache();
     buffer.ensure_text_cache();
@@ -7436,7 +7437,7 @@ fn highlighted_window(
     let mut lines = vec![Line::default()];
     let mut line_col = 0usize; // display column within current line (tabs expanded)
     for (start, end, kind) in pieces {
-        let style = token_style(kind);
+        let style = token_style(kind, theme);
         let mut piece_start = start;
         for (index, piece) in text[start..end].split('\n').enumerate() {
             if index > 0 {
@@ -7754,21 +7755,22 @@ fn cursor_style(editing: bool) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn token_style(kind: TokenKind) -> Style {
-    // Forced RGB — identical channels to `minimap_gfx::SYNTAX_*` / MinimapTheme
-    // so Kitty minimap ink matches the editor exactly (no ANSI remapping drift).
+fn token_style(kind: TokenKind, theme: minimap_gfx::MinimapTheme) -> Style {
+    // Forced RGB from the active MinimapTheme — same channels the Kitty strip
+    // uses via `theme_rgb_for_token`, so editor and minimap stay 1:1 on light
+    // and dark hosts (light pastels wash on cream; light theme uses darker hues).
     let rgb = |c: (u8, u8, u8)| Color::Rgb(c.0, c.1, c.2);
     match kind {
         TokenKind::Plain => Style::default(),
         TokenKind::Keyword => Style::default()
-            .fg(rgb(minimap_gfx::SYNTAX_KEYWORD))
+            .fg(rgb(theme.keyword))
             .add_modifier(Modifier::BOLD),
         TokenKind::Comment => Style::default()
-            .fg(rgb(minimap_gfx::SYNTAX_COMMENT))
+            .fg(rgb(theme.comment))
             .add_modifier(Modifier::ITALIC),
-        TokenKind::String => Style::default().fg(rgb(minimap_gfx::SYNTAX_STRING)),
-        TokenKind::Type => Style::default().fg(rgb(minimap_gfx::SYNTAX_TYPE)),
-        TokenKind::Function => Style::default().fg(rgb(minimap_gfx::SYNTAX_FUNCTION)),
+        TokenKind::String => Style::default().fg(rgb(theme.string)),
+        TokenKind::Type => Style::default().fg(rgb(theme.ty)),
+        TokenKind::Function => Style::default().fg(rgb(theme.function)),
     }
 }
 
@@ -9544,6 +9546,9 @@ mod tests {
     fn keywords_and_strings_use_different_colors() {
         let mut app = EditorApp::new("fn main() {\n    let s = \"fn\";\n}\n");
         app.set_language("rust");
+        let theme = app.minimap_theme;
+        let keyword = Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2);
+        let string = Color::Rgb(theme.string.0, theme.string.1, theme.string.2);
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
@@ -9554,18 +9559,28 @@ mod tests {
                 colors.push(pair[0].fg);
             }
         }
-        assert!(colors.contains(&Color::Magenta), "{colors:?}");
-        assert!(colors.contains(&Color::Green), "{colors:?}");
+        assert!(colors.contains(&keyword), "{colors:?}");
+        assert!(colors.contains(&string), "{colors:?}");
     }
 
     #[test]
     fn bend_and_markdown_use_keyword_color() {
         let mut app = EditorApp::new("# note\nimport Base\ndef shown():\n  match x:\n");
         app.set_language("bend");
-        assert!(screen_has_color(&app, Color::Magenta));
+        let keyword = Color::Rgb(
+            app.minimap_theme.keyword.0,
+            app.minimap_theme.keyword.1,
+            app.minimap_theme.keyword.2,
+        );
+        assert!(screen_has_color(&app, keyword));
         let mut app = EditorApp::new("# Title\nplain\n");
         app.set_language("markdown");
-        assert!(screen_has_color(&app, Color::Magenta));
+        let keyword = Color::Rgb(
+            app.minimap_theme.keyword.0,
+            app.minimap_theme.keyword.1,
+            app.minimap_theme.keyword.2,
+        );
+        assert!(screen_has_color(&app, keyword));
     }
 
     #[test]
@@ -10919,10 +10934,17 @@ mod tests {
         app.note_frame(80, 24);
         app.handle(CommandKey::Char('a'));
         let (keyword, comment) = selection_colors(&app, 80, 24);
-        assert_eq!(keyword.0, Color::Magenta);
+        let theme = app.minimap_theme;
+        assert_eq!(
+            keyword.0,
+            Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2)
+        );
         assert!(keyword.1, "keyword selection is reversed");
         assert!(comment.1, "comment selection is reversed");
-        assert_eq!(comment.0, Color::Yellow);
+        assert_eq!(
+            comment.0,
+            Color::Rgb(theme.comment.0, theme.comment.1, theme.comment.2)
+        );
     }
 
     #[test]
@@ -11246,7 +11268,7 @@ mod tests {
             app.ghost.as_ref(),
             0,
             usize::MAX,
-            app.minimap_theme.is_light(),
+            app.minimap_theme,
         );
         let line = &rendered.lines[1];
         let flat: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -11634,22 +11656,28 @@ mod tests {
                 .any(|(ch, rgb)| *ch == '/' && *rgb == theme.comment),
             "comment should use editor comment RGB, got {comment_line:?}"
         );
-        // Editor token_style forced-RGB must match the shared constants.
+        // Editor token_style forced-RGB must match the theme the strip uses.
         assert_eq!(
-            token_style(TokenKind::Keyword).fg,
-            Some(Color::Rgb(
-                minimap_gfx::SYNTAX_KEYWORD.0,
-                minimap_gfx::SYNTAX_KEYWORD.1,
-                minimap_gfx::SYNTAX_KEYWORD.2
-            ))
+            token_style(TokenKind::Keyword, theme).fg,
+            Some(Color::Rgb(theme.keyword.0, theme.keyword.1, theme.keyword.2))
         );
         assert_eq!(
-            token_style(TokenKind::String).fg,
-            Some(Color::Rgb(
-                minimap_gfx::SYNTAX_STRING.0,
-                minimap_gfx::SYNTAX_STRING.1,
-                minimap_gfx::SYNTAX_STRING.2
-            ))
+            token_style(TokenKind::String, theme).fg,
+            Some(Color::Rgb(theme.string.0, theme.string.1, theme.string.2))
+        );
+        // Light hosts get a darker palette — One Dark pastels fail cream contrast.
+        let light = minimap_gfx::MinimapTheme::light();
+        assert_ne!(light.comment, theme.comment);
+        assert_eq!(
+            token_style(TokenKind::Comment, light).fg,
+            Some(Color::Rgb(light.comment.0, light.comment.1, light.comment.2))
+        );
+        let cells_light = minimap_colored_line(&app.buffers[0], 2, 40, light);
+        assert!(
+            cells_light
+                .iter()
+                .any(|(ch, rgb)| *ch == '/' && *rgb == light.comment),
+            "light minimap comment must match light editor comment, got {cells_light:?}"
         );
     }
 
