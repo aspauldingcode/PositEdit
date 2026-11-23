@@ -5615,6 +5615,7 @@ impl EditorApp {
             .as_ref()
             .and_then(|yazi| yazi.cwd.parent().map(Path::to_path_buf))
         else {
+            self.notice = "already at the top — Esc closes · ll finds by name".into();
             return;
         };
         if parent.as_path()
@@ -5624,6 +5625,7 @@ impl EditorApp {
                 .map(|yazi| yazi.cwd.as_path())
                 .unwrap_or(Path::new(""))
         {
+            self.notice = "already at the top — Esc closes · ll finds by name".into();
             return;
         }
         if let Some(yazi) = self.yazi.as_mut() {
@@ -6067,7 +6069,7 @@ fn yazi_paragraph(app: &EditorApp, width: u16) -> Paragraph<'static> {
     Paragraph::new(Text::from(lines)).block(
         Block::default()
             .title("Open")
-            .title_bottom("Enter open · Esc close · h up")
+            .title_bottom("Enter open · Esc close · h up · ll find")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(focus_color(app.editing))),
     )
@@ -11390,7 +11392,29 @@ mod tests {
         let screen = rendered_at(&app, 100, 30);
         assert!(screen.contains("Open"), "{screen}");
         assert!(!screen.contains("Yazi"), "{screen}");
+        assert!(
+            screen.contains("ll find") || screen.contains("h up"),
+            "{screen}"
+        );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_browser_at_filesystem_root_explains_itself() {
+        let mut app = EditorApp::new("x");
+        app.note_frame(80, 24);
+        app.yazi = Some(YaziBrowse {
+            cwd: PathBuf::from("/"),
+            items: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+        });
+        app.handle_yazi(CommandKey::Char('h'));
+        assert!(
+            app.notice.contains("already at the top") && app.notice.contains("ll"),
+            "{}",
+            app.notice
+        );
     }
 
     #[test]
