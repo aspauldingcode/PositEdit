@@ -1696,7 +1696,7 @@ fn session_room(height: u16) -> usize {
 }
 
 fn collapsed_line(width: u16) -> Line<'static> {
-    let mut text = format!("{:width$}", "t  terminal", width = width as usize);
+    let mut text = format!("{:width$}", "t  terminal · press t", width = width as usize);
     if text.chars().count() > width as usize {
         text = text.chars().take(width as usize).collect();
     }

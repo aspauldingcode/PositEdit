@@ -3608,7 +3608,7 @@ impl EditorApp {
             '>' => self.toggle_chat(),
             'n' if self.pending_plan.is_some() => {
                 self.pending_plan = None;
-                self.notice = "plan cancelled".to_string();
+                self.notice = "plan cancelled — 1/2/4 previews again".into();
             }
             '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => self.workbench_key(ch),
             ';' => self.overlay = Overlay::Settings,
@@ -4774,9 +4774,9 @@ impl EditorApp {
             Ok((ok, text)) => {
                 self.show_output("*workbench*", &text);
                 self.notice = if ok {
-                    "plan finished".to_string()
+                    "plan finished — see *workbench* output".into()
                 } else {
-                    "plan failed".to_string()
+                    "plan failed — see *workbench* output".into()
                 };
             }
             Err(detail) => self.notice = detail,
@@ -11463,6 +11463,20 @@ mod tests {
             screen.contains("workbench output")
                 && (screen.contains('b') || screen.contains("builds")),
             "{screen}"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_plan_points_at_preview_keys() {
+        let mut app = EditorApp::new("hi\n");
+        app.note_frame(80, 24);
+        app.pending_plan = Some((PathBuf::from("."), vec!["echo".into(), "hi".into()]));
+        app.handle(CommandKey::Char('n'));
+        assert!(app.pending_plan.is_none());
+        assert!(
+            app.notice.contains("cancelled") && app.notice.contains('1'),
+            "{}",
+            app.notice
         );
     }
 

@@ -3,7 +3,7 @@
 # Usage: scripts/posit-dogfood.sh [file]
 #
 # Defaults to a long source file so the focused minimap and scrollbar chrome
-# are visible without hunting for overflow.
+# are visible without hunting for overflow. Toggle with :minimap if needed.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/target/release/posit-edit"
