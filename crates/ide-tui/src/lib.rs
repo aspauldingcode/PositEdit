@@ -158,6 +158,10 @@ pub struct EditorApp {
     graphics: graphics::GraphicsArbiter,
     spatial_cursor: usize,
     spatial_lines: Vec<String>,
+    /// Full `zl` outline before filter; empty outside Symbols lens.
+    spatial_outline: Vec<(usize, String)>,
+    /// Incremental filter while the Symbols lens is open.
+    spatial_filter: String,
     /// Active Canvas tab kind (`browser` / `phone` / `android`). `None` = closed.
     runtime_dock: Option<String>,
     runtime_focused: bool,
@@ -349,7 +353,7 @@ fn keybind_rows() -> Vec<(&'static str, &'static str)> {
         ("t", "toggle the terminal"),
         ("Ctrl-Alt-T", "toggle local Tab completion"),
         ("zo", "spatial overview"),
-        ("zl", "symbols outline — Enter jumps"),
+        ("zl", "symbols outline — type to filter · Enter jumps"),
         ("zn", "structural edit preview"),
         ("zt", "execution timeline"),
         ("zi", "change impact"),
@@ -1281,6 +1285,8 @@ impl EditorApp {
             graphics: graphics::GraphicsArbiter::default(),
             spatial_cursor: 0,
             spatial_lines: Vec::new(),
+            spatial_outline: Vec::new(),
+            spatial_filter: String::new(),
             runtime_dock: None,
             runtime_focused: false,
             runtime_width: None,
@@ -3980,8 +3986,10 @@ impl EditorApp {
                 self.target = view as f32;
                 self.editing = editing;
                 self.spatial_lines.clear();
+                self.spatial_outline.clear();
+                self.spatial_filter.clear();
                 self.graphics.clear();
-                self.notice = "spatial closed — zo overview · zl lens".into();
+                self.notice = "spatial closed — zo overview · zl symbols".into();
             }
             SpatialOutcome::OpenLens(session) => {
                 self.spatial_lines = session.lines;
@@ -4121,25 +4129,60 @@ impl EditorApp {
         self.apply_spatial_outcome(outcome);
         // Host fills the stub lens with a lightweight outline from the buffer.
         if self.spatial.active_mode == SpatialMode::Lens {
-            let symbols = outline_symbols(&self.focused().text());
-            if symbols.is_empty() {
-                self.spatial_lines = vec![
-                    "no symbols here — add a fn / struct / class / def".into(),
-                    "Esc closes".into(),
-                ];
-                self.notice = "symbols empty — Esc closes".into();
-            } else {
-                self.spatial_lines = symbols
-                    .into_iter()
-                    .map(|(line, label)| format!("{line:>4}  {label}"))
-                    .collect();
-                self.notice = format!(
-                    "symbols · {} · Enter jumps · Esc closes",
-                    self.spatial_lines.len()
-                );
-            }
-            self.spatial_cursor = 0;
+            self.spatial_outline = outline_symbols(&self.focused().text());
+            self.spatial_filter.clear();
+            self.refresh_symbol_lens();
         }
+    }
+
+    fn refresh_symbol_lens(&mut self) {
+        if self.spatial_outline.is_empty() {
+            self.spatial_lines = vec![
+                "no symbols here — add a fn / struct / class / def".into(),
+                "Esc closes".into(),
+            ];
+            self.spatial_cursor = 0;
+            self.notice = "symbols empty — Esc closes".into();
+            return;
+        }
+        let needle = self.spatial_filter.to_ascii_lowercase();
+        let rows: Vec<(usize, String)> = if needle.is_empty() {
+            self.spatial_outline.clone()
+        } else {
+            self.spatial_outline
+                .iter()
+                .filter(|(_, label)| label.to_ascii_lowercase().contains(&needle))
+                .cloned()
+                .collect()
+        };
+        if rows.is_empty() {
+            self.spatial_lines = vec![format!(
+                "no symbols match /{} — Backspace clears · Esc closes",
+                self.spatial_filter
+            )];
+            self.spatial_cursor = 0;
+            self.notice = format!("symbols /{} — 0 matches", self.spatial_filter);
+            return;
+        }
+        self.spatial_lines = rows
+            .into_iter()
+            .map(|(line, label)| format!("{line:>4}  {label}"))
+            .collect();
+        self.spatial_cursor = self
+            .spatial_cursor
+            .min(self.spatial_lines.len().saturating_sub(1));
+        self.notice = if self.spatial_filter.is_empty() {
+            format!(
+                "symbols · {} · type to filter · Enter jumps",
+                self.spatial_lines.len()
+            )
+        } else {
+            format!(
+                "symbols /{} · {} · Enter jumps",
+                self.spatial_filter,
+                self.spatial_lines.len()
+            )
+        };
     }
 
     fn spatial_structural(&mut self, op: StructuralOp) {
@@ -4211,6 +4254,18 @@ impl EditorApp {
                 if !self.spatial_lines.is_empty() {
                     self.spatial_cursor = (self.spatial_cursor + 1).min(self.spatial_lines.len() - 1);
                 }
+            }
+            CommandKey::Backspace if self.spatial.active_mode == SpatialMode::Lens => {
+                if self.spatial_filter.pop().is_some() {
+                    self.refresh_symbol_lens();
+                }
+            }
+            CommandKey::Char(ch)
+                if self.spatial.active_mode == SpatialMode::Lens
+                    && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') =>
+            {
+                self.spatial_filter.push(ch);
+                self.refresh_symbol_lens();
             }
             CommandKey::Enter => match self.spatial.active_mode {
                 SpatialMode::Overview => {
@@ -6918,12 +6973,18 @@ fn paint_spatial(frame: &mut Frame, app: &EditorApp, area: Rect) {
         return;
     }
     let title = match app.spatial.active_mode {
-        SpatialMode::Overview => "Spatial overview",
-        SpatialMode::Lens => "Symbols",
-        SpatialMode::Timeline => "Timeline",
-        SpatialMode::Impact => "Change impact",
-        SpatialMode::Structural => "Structural edit",
-        SpatialMode::Preview => "Preview",
+        SpatialMode::Overview => "Spatial overview".to_string(),
+        SpatialMode::Lens => {
+            if app.spatial_filter.is_empty() {
+                "Symbols".to_string()
+            } else {
+                format!("Symbols /{}", app.spatial_filter)
+            }
+        }
+        SpatialMode::Timeline => "Timeline".to_string(),
+        SpatialMode::Impact => "Change impact".to_string(),
+        SpatialMode::Structural => "Structural edit".to_string(),
+        SpatialMode::Preview => "Preview".to_string(),
         SpatialMode::Idle => return,
     };
     let body: Vec<Line> = app
@@ -12110,12 +12171,17 @@ mod tests {
             "{:?}",
             app.spatial_lines
         );
-        // Select gamma (last fn) and jump.
-        app.spatial_cursor = app
-            .spatial_lines
-            .iter()
-            .position(|l| l.contains("fn gamma"))
-            .expect("gamma");
+        // Type-to-filter down to gamma, then jump.
+        app.handle(CommandKey::Char('g'));
+        app.handle(CommandKey::Char('a'));
+        assert!(
+            app.spatial_lines.iter().all(|l| l.contains("gamma") || l.contains("no symbols")),
+            "filter ga → {:?}",
+            app.spatial_lines
+        );
+        assert!(app.spatial_filter == "ga", "{}", app.spatial_filter);
+        let screen = rendered_at(&app, 80, 24);
+        assert!(screen.contains("Symbols /ga") || screen.contains("/ga"), "{screen}");
         app.handle(CommandKey::Enter);
         assert_eq!(app.spatial.active_mode, SpatialMode::Idle);
         let (line, _) = app
