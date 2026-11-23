@@ -1439,6 +1439,14 @@ impl EditorApp {
         self.gutter.relative_numbers
     }
 
+    pub fn minimap_enabled(&self) -> bool {
+        self.minimap_on
+    }
+
+    pub fn canvas_is_frozen(&self) -> bool {
+        self.canvas_frozen
+    }
+
     pub fn is_editing(&self) -> bool {
         self.editing
     }
@@ -2391,7 +2399,9 @@ impl EditorApp {
                         {
                             let on = self.gutter.toggle_breakpoint(&path, doc_line);
                             self.notice = if on {
-                                format!("breakpoint on line {doc_line}")
+                                format!(
+                                    "breakpoint on line {doc_line} — click ● again to clear · 3 debug"
+                                )
                             } else {
                                 format!("breakpoint cleared line {doc_line}")
                             };
@@ -6626,7 +6636,7 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
     Paragraph::new(Text::from(lines)).block(
         Block::default()
             .title(title)
-            .title("Tab switches")
+            .title_bottom("Enter open · Tab mode · Esc close")
             .borders(Borders::ALL),
     )
 }
@@ -6634,11 +6644,11 @@ fn finder_paragraph(app: &EditorApp) -> Paragraph<'static> {
 fn finder_empty_hint(kind: FinderKind, query_empty: bool) -> &'static str {
     match (kind, query_empty) {
         (FinderKind::Files, true) => "type a path fragment · Tab switches to Grep",
-        (FinderKind::Files, false) => "no files match — try a shorter fragment",
-        (FinderKind::Grep, true) => "type text to search the workspace",
-        (FinderKind::Grep, false) => "no matches in the workspace",
+        (FinderKind::Files, false) => "no files match — try a shorter fragment · Esc closes",
+        (FinderKind::Grep, true) => "type text to search · Tab switches to Find · Esc closes",
+        (FinderKind::Grep, false) => "no matches — shorten the query · Tab → Find · Esc closes",
         (FinderKind::Buffers, true) => "type to filter open buffers · Tab switches to Find",
-        (FinderKind::Buffers, false) => "no open buffer matches",
+        (FinderKind::Buffers, false) => "no open buffer matches — Esc closes",
     }
 }
 
@@ -11352,6 +11362,7 @@ mod tests {
     fn finder_empty_hint_names_the_mode() {
         assert!(finder_empty_hint(FinderKind::Files, true).contains("path"));
         assert!(finder_empty_hint(FinderKind::Grep, false).contains("no matches"));
+        assert!(finder_empty_hint(FinderKind::Grep, true).contains("Tab"));
         assert!(finder_empty_hint(FinderKind::Buffers, true).contains("buffers"));
         let mut app = EditorApp::new("hi\n");
         app.set_workspace(std::env::temp_dir());
@@ -11362,7 +11373,11 @@ mod tests {
         app.refresh_finder();
         let screen = rendered_at(&app, 80, 24);
         assert!(
-            screen.contains("no matches") || screen.contains("workspace"),
+            screen.contains("no matches") || screen.contains("Esc"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("Enter open") || screen.contains("Tab mode"),
             "{screen}"
         );
     }

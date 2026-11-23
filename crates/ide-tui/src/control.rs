@@ -243,6 +243,8 @@ fn status_info(app: &EditorApp) -> StatusInfo {
         width: app.frame_width(),
         height: app.frame_height(),
         relative_numbers: app.relative_line_numbers(),
+        minimap_on: app.minimap_enabled(),
+        canvas_frozen: app.canvas_is_frozen(),
         control_socket: control_socket_path().display().to_string(),
     }
 }
@@ -378,6 +380,19 @@ mod tests {
             },
         );
         assert!(status.ok);
+        let status_body = status.result.as_ref().unwrap();
+        assert_eq!(status_body["minimap_on"], true);
+        assert_eq!(status_body["canvas_frozen"], false);
+        app.control_command("minimap").unwrap();
+        let status2 = dispatch(
+            &mut app,
+            &ControlRequest {
+                id: 22,
+                method: "status".into(),
+                params: serde_json::json!({}),
+            },
+        );
+        assert_eq!(status2.result.unwrap()["minimap_on"], false);
         let snap = dispatch(
             &mut app,
             &ControlRequest {
