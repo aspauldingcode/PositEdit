@@ -30,16 +30,18 @@ const FRONT_Y: f32 = -0.05;
 const STEP_X: f32 = -0.085;
 const STEP_Y: f32 = 0.048;
 const SHRINK_PER_SLOT: f32 = 0.3;
-const FRONT_MAX_WIDTH: f32 = 0.5;
-const FRONT_MAX_HEIGHT: f32 = 0.5;
+/// Front card fills most of the scene so minimap glyphs stay readable.
+const FRONT_MAX_WIDTH: f32 = 0.72;
+const FRONT_MAX_HEIGHT: f32 = 0.72;
 const CAMERA_FOV_DEGREES: f32 = 28.0;
 /// Cap Kitty scene pixels so flip frames stay cheap (PNG+base64 bound).
-/// AFK tick27: 256×160 (~80% fewer RGB bytes than 560×360) — still sharp on laptop cells.
-pub const SCENE_MAX_W: u32 = 256;
-pub const SCENE_MAX_H: u32 = 160;
+/// AFK tick28: restore readable scene (tick27 256×160 made code illegible).
+/// Same order as editor Kitty tiles — front card ~72% keeps 2× glyphs crisp.
+pub const SCENE_MAX_W: u32 = 960;
+pub const SCENE_MAX_H: u32 = 640;
 /// Under elevated memory pressure, raster a smaller Flip scene.
-pub const SCENE_PRESSURE_W: u32 = 192;
-pub const SCENE_PRESSURE_H: u32 = 112;
+pub const SCENE_PRESSURE_W: u32 = 640;
+pub const SCENE_PRESSURE_H: u32 = 400;
 
 /// Scene pixel caps for normal vs elevated memory pressure.
 pub fn scene_max_dims(elevated_pressure: bool) -> (u32, u32) {

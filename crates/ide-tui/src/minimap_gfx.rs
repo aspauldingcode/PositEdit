@@ -668,14 +668,13 @@ fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
     }
 }
 
-/// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
-/// Scale-2 glyphs need room — 1× 5×7 looked like TV static when sampled onto cards.
-/// AFK tick25: 240×150 (~70% fewer RGB bytes than 420×280) keeps cards legible.
-pub const FLIP_CARD_W: u32 = 240;
-pub const FLIP_CARD_H: u32 = 150;
-/// Under elevated memory pressure — smaller still.
-pub const FLIP_CARD_PRESSURE_W: u32 = 144;
-pub const FLIP_CARD_PRESSURE_H: u32 = 90;
+/// Flip-card preview — same glyph raster as Kitty minimap (`render_base_rgb`).
+/// AFK tick28: restore 960×640 (tick25 240×150 was illegible after shear).
+pub const FLIP_CARD_W: u32 = 960;
+pub const FLIP_CARD_H: u32 = 640;
+/// Under elevated memory pressure — smaller still, still readable.
+pub const FLIP_CARD_PRESSURE_W: u32 = 640;
+pub const FLIP_CARD_PRESSURE_H: u32 = 400;
 pub const FLIP_GLYPH_SCALE: u32 = 2;
 
 /// Flip preview bitmap size for normal vs elevated pressure.
@@ -697,8 +696,8 @@ pub fn flip_glyph_scale(elevated_pressure: bool) -> u32 {
 }
 /// Soft cap on cached Flip/minimap preview Arcs (RAM).
 /// AFK: neighbor warm is ±1 (≤3 keys) — 4 is enough; was 24 when every buffer warmed.
-/// AFK tick24: 3 slots (was 4/6/8) — Flip only warms ±1 anyway.
-pub const PREVIEW_POOL_CAP: usize = 3;
+/// AFK tick28: 8 slots — larger card Arcs; still ±1 warm window.
+pub const PREVIEW_POOL_CAP: usize = 8;
 
 /// Stable cache key for a buffer strip / Flip card preview.
 pub fn preview_key(slot: usize, revision: u64, theme: u64, width: u32, height: u32) -> u64 {
@@ -788,6 +787,18 @@ impl PreviewPool {
             .lock()
             .ok()
             .and_then(|map| map.get(&key).cloned())
+    }
+
+    /// Publish an already-rasterized Arc (zero-copy share with Flip / minimap).
+    pub fn insert(&self, key: u64, img: Arc<crate::flip3d::PreviewImage>) {
+        if let Ok(mut map) = self.cache.lock() {
+            map.insert(key, img);
+            trim_preview_cache(&mut map);
+        }
+        if let Ok(mut set) = self.inflight.lock() {
+            set.remove(&key);
+        }
+        self.ready_gen.fetch_add(1, Ordering::Release);
     }
 
     /// True when UI should snapshot + enqueue (not cached, not already queued).
@@ -907,10 +918,11 @@ fn render_preview_job(job: &PreviewJob) -> crate::flip3d::PreviewImage {
 }
 
 /// In-memory cache so scroll-only frames skip rope resampling + full fills.
+/// Base is Arc-shared with PreviewPool so Flip samples the same Kitty glyphs.
 #[derive(Default)]
 pub struct MinimapFrameCache {
     content: Option<MinimapContentKey>,
-    base_rgb: Vec<u8>,
+    base: Option<Arc<crate::flip3d::PreviewImage>>,
     /// Reused tinted frame buffer (avoids alloc on every scroll).
     tinted: Vec<u8>,
 }
@@ -926,24 +938,27 @@ impl MinimapFrameCache {
         theme: MinimapTheme,
         line_cells: impl FnMut(usize, usize) -> Vec<(char, (u8, u8, u8))>,
     ) -> &[u8] {
-        if self.content != Some(content) || self.base_rgb.is_empty() {
-            self.base_rgb = render_base_rgb(layout, img_w, img_h, theme, line_cells);
+        if self.content != Some(content) || self.base.is_none() {
+            let rgb = render_base_rgb(layout, img_w, img_h, theme, line_cells);
+            self.base = Some(Arc::new(crate::flip3d::PreviewImage {
+                width: img_w,
+                height: img_h,
+                rgb,
+            }));
             self.content = Some(content);
         }
-        apply_viewport_tint_into(
-            &self.base_rgb,
-            &mut self.tinted,
-            img_w,
-            img_h,
-            layout,
-            theme,
-        );
+        let base = self.base.as_ref().map(|b| b.rgb.as_slice()).unwrap_or(&[]);
+        apply_viewport_tint_into(base, &mut self.tinted, img_w, img_h, layout, theme);
         &self.tinted
+    }
+
+    pub fn base_arc(&self) -> Option<Arc<crate::flip3d::PreviewImage>> {
+        self.base.clone()
     }
 
     pub fn clear(&mut self) {
         self.content = None;
-        self.base_rgb.clear();
+        self.base = None;
         self.tinted.clear();
     }
 }
@@ -1013,13 +1028,10 @@ mod tests {
     #[test]
     fn flip_preview_uses_double_scale_glyphs() {
         assert!(FLIP_GLYPH_SCALE >= 2, "1× Flip glyphs read as TV static");
-        assert_eq!(FLIP_CARD_W, 240);
-        assert_eq!(FLIP_CARD_H, 150);
-        assert!(
-            FLIP_CARD_W * FLIP_CARD_H * 3 < 280 * 176 * 3,
-            "AFK card must stay under the prior 280×176 RGB budget"
-        );
-        assert!(PREVIEW_POOL_CAP <= 3);
+        assert_eq!(FLIP_CARD_W, 960);
+        assert_eq!(FLIP_CARD_H, 640);
+        assert_eq!(FLIP_GLYPH_SCALE, 2);
+        assert!(PREVIEW_POOL_CAP <= 8);
         assert_eq!(flip_card_dims(false), (FLIP_CARD_W, FLIP_CARD_H));
         assert_eq!(
             flip_card_dims(true),

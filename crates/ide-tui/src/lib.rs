@@ -3310,7 +3310,21 @@ impl EditorApp {
                 cw,
                 ch,
             );
-            let preview = self.preview_pool.get(key);
+            // Prefer Flip-sized Arc; else live minimap bytes for focus (same glyphs).
+            let preview = self.preview_pool.get(key).or_else(|| {
+                if index != self.focus {
+                    return None;
+                }
+                let mk = self.editor_minimap_key?;
+                let share = minimap_gfx::preview_key(
+                    index,
+                    buffer.document.revision(),
+                    theme_fp,
+                    mk.px_w,
+                    mk.px_h,
+                );
+                self.preview_pool.get(share)
+            });
             let lines = if preview.is_some() {
                 Vec::new()
             } else {
@@ -10578,12 +10592,13 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
         };
         // Field-split: buffers + cache + graphics can borrow together; tinted
         // RGB stays in cache and feeds PNG encode without an extra Vec copy.
+        // Base Arc is published into PreviewPool so Flip samples the same bytes.
         let painted = {
             let mut cache = app.minimap_frame_cache.borrow_mut();
             let rgb = cache.rgb_for(content, layout, px_w, px_h, theme, |line, cols| {
                 minimap_syntax_cells(&app.buffers[focus], line, cols, theme)
             });
-            canvas::paint_kitty_rgb(
+            let ok = canvas::paint_kitty_rgb(
                 &mut stdout(),
                 &mut app.graphics,
                 rect,
@@ -10591,7 +10606,23 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
                 px_w,
                 px_h,
                 image_id,
-            )?
+            )?;
+            if ok {
+                if let Some(base) = cache.base_arc() {
+                    let share_key = minimap_gfx::preview_key(
+                        focus,
+                        revision,
+                        theme.fingerprint,
+                        px_w,
+                        px_h,
+                    );
+                    app.preview_pool.insert(share_key, base);
+                }
+                if let Some(job) = app.flip_preview_job(focus) {
+                    app.preview_pool.request(job);
+                }
+            }
+            ok
         };
         if painted {
             app.editor_minimap_key = Some(key);
