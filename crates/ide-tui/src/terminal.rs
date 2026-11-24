@@ -808,8 +808,10 @@ impl Panel {
         for session in &mut self.sessions {
             session.grid.set_scrollback_limit(limit);
         }
-        if level.is_elevated() && self.console.len() > 500 {
-            let drop = self.console.len() - 500;
+        // AFK: trim shared console with scrollback budget (was hard 500).
+        let console_cap = level.scrollback_limit().max(60);
+        if level.is_elevated() && self.console.len() > console_cap {
+            let drop = self.console.len() - console_cap;
             self.console.drain(0..drop);
             self.console_scroll = self.console_scroll.saturating_sub(drop);
         }

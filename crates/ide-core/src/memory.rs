@@ -4,11 +4,12 @@
 //! when the OS is under jetsam / memory pressure.
 
 /// Default undo/redo depth in normal conditions.
-pub const HISTORY_NORMAL: usize = 64;
+/// AFK tick23: 40 (was 48/64) — rope snapshots dominate idle RSS.
+pub const HISTORY_NORMAL: usize = 40;
 /// Aggressive depth when the OS reports elevated memory pressure.
 pub const HISTORY_PRESSURE: usize = 8;
 /// Hard ceiling — never retain more than this many snapshots.
-pub const HISTORY_HARD_MAX: usize = 128;
+pub const HISTORY_HARD_MAX: usize = 96;
 
 /// macOS `kern.memorystatus_vm_pressure_level` style levels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -24,16 +25,18 @@ impl PressureLevel {
     pub fn history_limit(self) -> usize {
         match self {
             PressureLevel::Normal => HISTORY_NORMAL,
-            PressureLevel::Warning => 24,
+            // AFK: Warning was 24 — still too many rope clones on constrained hosts.
+            PressureLevel::Warning => 16,
             PressureLevel::Urgent | PressureLevel::Critical => HISTORY_PRESSURE,
         }
     }
 
     pub fn scrollback_limit(self) -> usize {
         match self {
-            PressureLevel::Normal => 500,
-            PressureLevel::Warning => 200,
-            PressureLevel::Urgent | PressureLevel::Critical => 80,
+            // AFK tick23: tighter PTY scrollback (was 500/300/200/80).
+            PressureLevel::Normal => 240,
+            PressureLevel::Warning => 120,
+            PressureLevel::Urgent | PressureLevel::Critical => 60,
         }
     }
 
@@ -168,6 +171,14 @@ mod tests {
     fn history_limits_tighten_under_pressure() {
         assert!(PressureLevel::Normal.history_limit() > PressureLevel::Urgent.history_limit());
         assert_eq!(PressureLevel::Critical.history_limit(), HISTORY_PRESSURE);
+        assert_eq!(HISTORY_NORMAL, 40);
+        assert!(HISTORY_HARD_MAX <= 96);
+        assert_eq!(PressureLevel::Warning.history_limit(), 16);
+        assert_eq!(PressureLevel::Normal.scrollback_limit(), 240);
+        assert!(
+            PressureLevel::Normal.scrollback_limit()
+                > PressureLevel::Warning.scrollback_limit()
+        );
     }
 
     #[test]

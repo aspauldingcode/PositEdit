@@ -1133,11 +1133,62 @@ pub fn paint_kitty_rgb24_opts(
         write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
     }
     let b64 = base64_encode(&rgb[..expected]);
+    write_kitty_rgb24_chunks(out, inner, &b64, width, height, image_id, rewrite_placeholders)
+}
+
+/// Like [`paint_kitty_rgb24_opts`] but encodes into a caller-owned scratch String.
+pub fn paint_kitty_rgb24_into(
+    out: &mut impl Write,
+    arbiter: &mut GraphicsArbiter,
+    inner: Rect,
+    rgb: &[u8],
+    width: u32,
+    height: u32,
+    image_id: u32,
+    delete_first: bool,
+    rewrite_placeholders: bool,
+    b64_scratch: &mut String,
+) -> io::Result<bool> {
+    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(3);
+    if inner.width < 2 || inner.height < 2 || width == 0 || height == 0 || image_id == 0 {
+        return Ok(false);
+    }
+    if rgb.len() < expected {
+        return Ok(false);
+    }
+    let backend = arbiter.backend();
+    if backend != GraphicsBackend::Kitty {
+        return Ok(false);
+    }
+    if delete_first {
+        write!(out, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")?;
+    }
+    base64_encode_into(&rgb[..expected], b64_scratch);
+    write_kitty_rgb24_chunks(
+        out,
+        inner,
+        b64_scratch,
+        width,
+        height,
+        image_id,
+        rewrite_placeholders,
+    )
+}
+
+fn write_kitty_rgb24_chunks(
+    out: &mut impl Write,
+    inner: Rect,
+    b64: &str,
+    width: u32,
+    height: u32,
+    image_id: u32,
+    rewrite_placeholders: bool,
+) -> io::Result<bool> {
     let cols = inner.width;
     let rows = inner.height;
     let box_params = format!("U=1,c={cols},r={rows},z=-1073741824");
     let mut first = true;
-    let mut rest = b64.as_str();
+    let mut rest = b64;
     while !rest.is_empty() {
         let take = rest.len().min(4096);
         let (chunk, next) = rest.split_at(take);
@@ -1302,8 +1353,19 @@ pub fn delete_kitty_image(out: &mut impl Write, image_id: u32) -> io::Result<()>
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    base64_encode_into(bytes, &mut out);
+    out
+}
+
+/// Encode `bytes` into `out`, reusing capacity across Flip transmits.
+pub fn base64_encode_into(bytes: &[u8], out: &mut String) {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    out.clear();
+    let need = bytes.len().div_ceil(3) * 4;
+    if out.capacity() < need {
+        out.reserve(need - out.capacity());
+    }
     for chunk in bytes.chunks(3) {
         let a = chunk[0] as u32;
         let b = chunk.get(1).copied().unwrap_or(0) as u32;
@@ -1322,7 +1384,6 @@ fn base64_encode(bytes: &[u8]) -> String {
             '='
         });
     }
-    out
 }
 
 #[cfg(test)]
@@ -1333,6 +1394,17 @@ mod tests {
     fn base64_round_trip_prefix() {
         let encoded = base64_encode(b"PNG");
         assert!(encoded.starts_with("UE5H"));
+    }
+
+    #[test]
+    fn base64_encode_into_reuses_capacity() {
+        let mut scratch = String::with_capacity(64);
+        base64_encode_into(b"0123456789abcdef", &mut scratch);
+        let cap = scratch.capacity();
+        assert!(scratch.len() > 8);
+        base64_encode_into(b"PNG", &mut scratch);
+        assert_eq!(scratch.capacity(), cap);
+        assert!(scratch.starts_with("UE5H"));
     }
 
     #[test]

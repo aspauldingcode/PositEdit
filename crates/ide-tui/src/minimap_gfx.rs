@@ -670,12 +670,35 @@ fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
 
 /// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
 /// Scale-2 glyphs need room — 1× 5×7 looked like TV static when sampled onto cards.
-/// AFK: 360×240 (~26% fewer RGB bytes than 420×280) keeps cards legible.
-pub const FLIP_CARD_W: u32 = 360;
-pub const FLIP_CARD_H: u32 = 240;
+/// AFK tick22: 280×176 (~58% fewer RGB bytes than 420×280) keeps cards legible.
+pub const FLIP_CARD_W: u32 = 280;
+pub const FLIP_CARD_H: u32 = 176;
+/// Under elevated memory pressure — smaller still.
+pub const FLIP_CARD_PRESSURE_W: u32 = 168;
+pub const FLIP_CARD_PRESSURE_H: u32 = 108;
 pub const FLIP_GLYPH_SCALE: u32 = 2;
+
+/// Flip preview bitmap size for normal vs elevated pressure.
+pub fn flip_card_dims(elevated_pressure: bool) -> (u32, u32) {
+    if elevated_pressure {
+        (FLIP_CARD_PRESSURE_W, FLIP_CARD_PRESSURE_H)
+    } else {
+        (FLIP_CARD_W, FLIP_CARD_H)
+    }
+}
+
+/// Glyph cell scale for Flip previews — 1× under pressure (faster paint_glyph).
+pub fn flip_glyph_scale(elevated_pressure: bool) -> u32 {
+    if elevated_pressure {
+        1
+    } else {
+        FLIP_GLYPH_SCALE
+    }
+}
 /// Soft cap on cached Flip/minimap preview Arcs (RAM).
-pub const PREVIEW_POOL_CAP: usize = 24;
+/// AFK: neighbor warm is ±1 (≤3 keys) — 4 is enough; was 24 when every buffer warmed.
+/// AFK tick24: 3 slots (was 4/6/8) — Flip only warms ±1 anyway.
+pub const PREVIEW_POOL_CAP: usize = 3;
 
 /// Stable cache key for a buffer strip / Flip card preview.
 pub fn preview_key(slot: usize, revision: u64, theme: u64, width: u32, height: u32) -> u64 {
@@ -708,6 +731,8 @@ pub struct PreviewJob {
     pub theme: MinimapTheme,
     pub width: u32,
     pub height: u32,
+    /// Glyph cell scale (1 under pressure, 2 normally).
+    pub glyph_scale: u32,
     /// Token-colored cells (snapshot from UI highlight cache — worker never touches ropes).
     pub lines: Vec<Vec<(char, (u8, u8, u8))>>,
 }
@@ -859,13 +884,13 @@ fn render_preview_job(job: &PreviewJob) -> crate::flip3d::PreviewImage {
     let width = job.width.max(8);
     let height = job.height.max(8);
     let line_count = job.lines.len().max(1);
-    // Scale-2 glyphs so Flip cards stay legible (1× reads as static noise).
+    let scale = job.glyph_scale.max(1);
     let layout = layout_proportional(
         line_count,
         0,
         line_count.min(24).max(1),
         height,
-        FLIP_GLYPH_SCALE,
+        scale,
     );
     let lines = &job.lines;
     let rgb = render_base_rgb(layout, width, height, job.theme, |line, cols| {
@@ -988,19 +1013,28 @@ mod tests {
     #[test]
     fn flip_preview_uses_double_scale_glyphs() {
         assert!(FLIP_GLYPH_SCALE >= 2, "1× Flip glyphs read as TV static");
-        assert_eq!(FLIP_CARD_W, 360);
-        assert_eq!(FLIP_CARD_H, 240);
+        assert_eq!(FLIP_CARD_W, 280);
+        assert_eq!(FLIP_CARD_H, 176);
         assert!(
-            FLIP_CARD_W * FLIP_CARD_H * 3 < 420 * 280 * 3,
-            "AFK card must stay under the old 420×280 RGB budget"
+            FLIP_CARD_W * FLIP_CARD_H * 3 < 320 * 200 * 3,
+            "AFK card must stay under the prior 320×200 RGB budget"
         );
-        assert!(PREVIEW_POOL_CAP <= 24);
+        assert!(PREVIEW_POOL_CAP <= 3);
+        assert_eq!(flip_card_dims(false), (FLIP_CARD_W, FLIP_CARD_H));
+        assert_eq!(
+            flip_card_dims(true),
+            (FLIP_CARD_PRESSURE_W, FLIP_CARD_PRESSURE_H)
+        );
+        assert!(FLIP_CARD_PRESSURE_W * FLIP_CARD_PRESSURE_H < FLIP_CARD_W * FLIP_CARD_H);
         let theme = MinimapTheme::light();
+        assert_eq!(flip_glyph_scale(false), 2);
+        assert_eq!(flip_glyph_scale(true), 1);
         let job = PreviewJob {
             key: 1,
             theme,
             width: FLIP_CARD_W,
             height: FLIP_CARD_H,
+            glyph_scale: FLIP_GLYPH_SCALE,
             lines: vec![
                 vec![('A', theme.fg), ('B', theme.keyword), ('C', theme.string)],
                 vec![('1', theme.digit), ('2', theme.fg), ('3', theme.function)],

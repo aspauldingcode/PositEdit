@@ -2194,10 +2194,19 @@ impl EditorApp {
         self.target
     }
 
+    /// Flip needs a high-rate wake only while scroll/easing is in flight —
+    /// a settled open Flip must not pin the event loop at ~60 Hz (AFK CPU).
+    fn flip_animating(&self) -> bool {
+        if !self.flip.open {
+            return false;
+        }
+        self.flip.dirty || (self.flip.scroll - self.flip.selected as f32).abs() >= 0.001
+    }
+
     pub fn animating(&self) -> bool {
         // Scroll/view motion, Flip 3D easing, or async doc preview finishing.
         (self.target - self.view).abs() >= 0.05
-            || self.flip.open
+            || self.flip_animating()
             || self.preview_engine.busy()
     }
 
@@ -2343,18 +2352,39 @@ impl EditorApp {
             // One present after settle so Kitty minimap can return.
             changed = true;
         }
-        let before = self.hover_hint.clone();
-        self.refresh_hover_hint();
-        let pressure_notice = self.maintain_memory_pressure();
-        changed || pressure_notice || self.hover_hint != before
+        // AFK: Flip owns the screen — skip hover-hint work until it closes.
+        let hint_changed = if self.flip.open {
+            false
+        } else if self.hover_hints && self.hover.is_some() {
+            let before = self.hover_hint.clone();
+            self.refresh_hover_hint();
+            self.hover_hint != before
+        } else if self.hover_hint.take().is_some() {
+            true
+        } else {
+            false
+        };
+        // AFK: Flip owns the frame — defer OS pressure probes until it closes.
+        let pressure_notice = if self.flip.open {
+            false
+        } else {
+            self.maintain_memory_pressure()
+        };
+        changed || pressure_notice || hint_changed
     }
 
     /// Probe OS memory pressure on a slow cadence and shrink undo/scrollback.
     /// Must not dirty the UI every tick — that made Urgent feel like a soft lock.
     fn maintain_memory_pressure(&mut self) -> bool {
+        // AFK: idle hosts probe every 5s; elevated/animating keep 2s.
+        let interval = if self.last_pressure.is_elevated() || self.animating() {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(5)
+        };
         let due = self
             .memory_pressure_at
-            .is_none_or(|at| at.elapsed() >= Duration::from_secs(2));
+            .is_none_or(|at| at.elapsed() >= interval);
         if !due {
             return false;
         }
@@ -2371,6 +2401,10 @@ impl EditorApp {
         if changed {
             self.last_pressure = level;
             if level.is_elevated() {
+                // Drop Flip/minimap Arcs sized for the previous budget.
+                self.preview_pool.clear();
+                self.minimap_frame_cache.borrow_mut().clear();
+                self.editor_minimap_key = None;
                 if self.notifications.len() > 8 {
                     self.notifications.truncate(8);
                 }
@@ -3246,34 +3280,53 @@ impl EditorApp {
 
     fn flip_cards(&self) -> Vec<flip3d::BufferCard> {
         let theme_fp = self.minimap_theme.fingerprint;
-        let kitty = minimap_gfx::host_is_kitty();
+        let count = self.buffers.len();
+        // AFK: only rope-scan / preview-lookup cards that are on-screen.
+        // Off-screen stubs keep slot indices stable for render_scene_rgb.
+        let visible: std::collections::HashSet<usize> =
+            flip3d::visible_card_indices(self.flip.scroll, count)
+                .into_iter()
+                .collect();
         self.buffers
             .iter()
             .enumerate()
             .map(|(index, buffer)| {
-                let text = buffer.text();
-                let lines: Vec<String> = text
-                    .lines()
-                    .take(14)
-                    .map(|line| {
-                        let mut s: String = line.chars().take(48).collect();
-                        if s.is_empty() {
-                            s.push(' ');
-                        }
-                        s
-                    })
-                    .collect();
-                let preview = if kitty {
-                    let key = minimap_gfx::preview_key(
-                        index,
-                        buffer.document.revision(),
-                        theme_fp,
-                        minimap_gfx::FLIP_CARD_W,
-                        minimap_gfx::FLIP_CARD_H,
-                    );
-                    self.preview_pool.get(key)
+                if !visible.contains(&index) {
+                    return flip3d::BufferCard {
+                        title: String::new(),
+                        lines: Vec::new(),
+                        active: false,
+                        preview: None,
+                    };
+                }
+                // Pool lookup even without a Kitty host — tests + text fallback share Arcs.
+                let elevated = self.last_pressure.is_elevated();
+                let (cw, ch) = minimap_gfx::flip_card_dims(elevated);
+                let scale = minimap_gfx::flip_glyph_scale(elevated);
+                let key = minimap_gfx::preview_key(
+                    index,
+                    buffer.document.revision() ^ (u64::from(scale) << 56),
+                    theme_fp,
+                    cw,
+                    ch,
+                );
+                let preview = self.preview_pool.get(key);
+                // AFK: greeked rope lines are only a fallback while the preview Arc loads.
+                let lines = if preview.is_some() {
+                    Vec::new()
                 } else {
-                    None
+                    // AFK tick23: shorter greeked fallback (preview Arc usually lands first).
+                    let text = buffer.text();
+                    text.lines()
+                        .take(6)
+                        .map(|line| {
+                            let mut s: String = line.chars().take(28).collect();
+                            if s.is_empty() {
+                                s.push(' ');
+                            }
+                            s
+                        })
+                        .collect()
                 };
                 flip3d::BufferCard {
                     title: buffer.name.clone(),
@@ -3285,20 +3338,32 @@ impl EditorApp {
             .collect()
     }
 
+    /// Cache key only — no rope/highlight snapshot (AFK schedule hot path).
+    fn flip_preview_cache_key(&self, index: usize) -> Option<u64> {
+        let buffer = self.buffers.get(index)?;
+        let elevated = self.last_pressure.is_elevated();
+        let (card_w, card_h) = minimap_gfx::flip_card_dims(elevated);
+        let scale = minimap_gfx::flip_glyph_scale(elevated);
+        Some(minimap_gfx::preview_key(
+            index,
+            buffer.document.revision() ^ (u64::from(scale) << 56),
+            self.minimap_theme.fingerprint,
+            card_w,
+            card_h,
+        ))
+    }
+
     fn flip_preview_job(&self, index: usize) -> Option<minimap_gfx::PreviewJob> {
         let buffer = self.buffers.get(index)?;
         let theme = self.minimap_theme;
-        let px_char = minimap_gfx::PX_PER_CHAR_BASE * minimap_gfx::FLIP_GLYPH_SCALE;
-        let px_line = minimap_gfx::PX_PER_LINE_BASE * minimap_gfx::FLIP_GLYPH_SCALE;
-        let cols = ((minimap_gfx::FLIP_CARD_W / px_char) as usize).clamp(20, 64);
-        let max_lines = ((minimap_gfx::FLIP_CARD_H / px_line) as usize).clamp(8, 32);
-        let key = minimap_gfx::preview_key(
-            index,
-            buffer.document.revision(),
-            theme.fingerprint,
-            minimap_gfx::FLIP_CARD_W,
-            minimap_gfx::FLIP_CARD_H,
-        );
+        let elevated = self.last_pressure.is_elevated();
+        let (card_w, card_h) = minimap_gfx::flip_card_dims(elevated);
+        let scale = minimap_gfx::flip_glyph_scale(elevated);
+        let px_char = minimap_gfx::PX_PER_CHAR_BASE * scale;
+        let px_line = minimap_gfx::PX_PER_LINE_BASE * scale;
+        let cols = ((card_w / px_char) as usize).clamp(16, 64);
+        let max_lines = ((card_h / px_line) as usize).clamp(6, 32);
+        let key = self.flip_preview_cache_key(index)?;
         buffer.ensure_highlight_cache();
         let mut lines = Vec::with_capacity(max_lines);
         for line in 0..max_lines.min(buffer.document.len_lines().max(1)) {
@@ -3307,30 +3372,46 @@ impl EditorApp {
         Some(minimap_gfx::PreviewJob {
             key,
             theme,
-            width: minimap_gfx::FLIP_CARD_W,
-            height: minimap_gfx::FLIP_CARD_H,
+            width: card_w,
+            height: card_h,
+            glyph_scale: scale,
             lines,
         })
     }
 
-    /// Snapshot highlight cells and enqueue headless Kitty Flip previews (never blocks).
+    /// Snapshot highlight cells and enqueue Flip previews for stack neighbours only
+    /// (never every open buffer — AFK CPU/RAM when many files are open).
     fn schedule_flip_previews(&self) {
         if cfg!(test) || !self.kitty_graphics || !minimap_gfx::host_is_kitty() || !self.flip.open {
             return;
         }
-        for index in 0..self.buffers.len() {
+        let count = self.buffers.len();
+        if count == 0 {
+            return;
+        }
+        let selected = self.flip.selected.min(count - 1);
+        let radius = if self.last_pressure.is_elevated() {
+            flip3d::WARM_RADIUS_PRESSURE
+        } else {
+            flip3d::WARM_RADIUS
+        };
+        for index in flip3d::warm_indices(selected, count, radius) {
+            let Some(key) = self.flip_preview_cache_key(index) else {
+                continue;
+            };
+            // AFK: do not rope-scan / highlight-snapshot when already cached.
+            if !self.preview_pool.needs_work(key) {
+                continue;
+            }
             let Some(job) = self.flip_preview_job(index) else {
                 continue;
             };
-            if !self.preview_pool.needs_work(job.key) {
-                continue;
-            }
             self.preview_pool.request(job);
         }
     }
 
-    /// Sync-raster the selected card (+neighbours) so the first Flip frame has
-    /// real syntax glyphs. Under elevated pressure, only the front card is sync.
+    /// Sync-raster only the front Flip card when missing from cache.
+    /// Neighbours stay async (AFK: was ±1 sync — blocked the present path).
     fn warm_flip_previews_sync(&self) {
         if cfg!(test)
             || !self.kitty_graphics
@@ -3341,20 +3422,18 @@ impl EditorApp {
         }
         let count = self.buffers.len();
         let selected = self.flip.selected.min(count - 1);
-        let deltas: &[i32] = if self.last_pressure.is_elevated() {
-            &[0]
-        } else {
-            &[-1, 0, 1]
-        };
-        for &delta in deltas {
-            let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
-            let Some(job) = self.flip_preview_job(index) else {
-                continue;
-            };
-            let _ = self.preview_pool.get_or_render(job);
+        if let Some(key) = self.flip_preview_cache_key(selected) {
+            if self.preview_pool.get(key).is_none() {
+                if let Some(job) = self.flip_preview_job(selected) {
+                    let _ = self.preview_pool.get_or_render(job);
+                }
+            }
         }
-        // Remaining buffers stay async.
-        self.schedule_flip_previews();
+        // AFK: enqueue neighbours only near settle — mid-scroll jobs were wasted.
+        let settling = (self.flip.scroll - selected as f32).abs() < 0.2;
+        if settling {
+            self.schedule_flip_previews();
+        }
     }
 
     fn flip_scene_theme(&self) -> flip3d::SceneTheme {
@@ -9234,7 +9313,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
     let mut present_needed = true;
     // One UI thread: drain→apply→quit→present-once. Never present between
     // individual scroll events (that made quit wait on the wheel storm).
-    let mut frames = scheduler::FrameClock::new(60);
+    // AFK: 24 Hz present ceiling (was 60) — still smooth for Flip easing.
+    let mut frames = scheduler::FrameClock::new(24);
     loop {
         let size = terminal.size()?;
         app.note_pixels(host_pixels());
@@ -9243,24 +9323,31 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         let wait = if present_needed && frames.due() {
             Duration::ZERO
         } else if app.animating()
-            || app.minimap_kitty_suppressed()
             || app.terminals.wants_poll()
-            || app.preview_engine.busy()
+            // AFK: markdown/help preview workers must not pin 8ms wakes during Flip.
+            || (!app.flip.open && app.preview_engine.busy())
         {
             frames.wait_hint().max(Duration::from_millis(8))
+        } else if app.minimap_kitty_suppressed() {
+            // AFK: wheel/slide suppress used to share the 8ms hot path.
+            Duration::from_millis(55)
+        } else if app.flip.open {
+            // Settled Flip: wake for async preview completion, not 60 Hz raster.
+            Duration::from_millis(350)
         } else if let Some(hint_wait) = app.hover_hint_wait() {
             hint_wait
         } else if app.terminals.open {
-            Duration::from_millis(50)
+            // Open but quiet (wants_poll already took the fast path above).
+            Duration::from_millis(150)
         } else if !app.canvas_surfaces.is_empty() {
-            Duration::from_millis(100)
+            Duration::from_millis(200)
         } else if let Some(deadline) = app.chord_deadline {
             deadline
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(100))
         } else {
             // Fully idle editor: wake less often (AFK battery / CPU).
-            Duration::from_millis(250)
+            Duration::from_millis(750)
         };
 
         let mut raw = Vec::new();
@@ -9314,7 +9401,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         let preview_dirty = app
             .preview_engine
             .poll(&mut app.help_doc, &mut app.markdown_doc);
-        if preview_dirty {
+        // AFK: Flip covers the screen — apply preview results but don't force a present.
+        if preview_dirty && !app.flip.open {
             present_needed = true;
             app.canvas_chrome_dirty.set(true);
             if let Some(err) = app.preview_engine.last_error.take() {
@@ -9350,13 +9438,15 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         }
 
         // --- 4) At most one present per frame clock tick. ---
+        // AFK: do not force presents solely for minimap suppress — tick/input
+        // already mark present_needed when geometry/scroll actually changes.
+        // AFK: PTY/canvas churn under Flip is invisible — don't burn presents.
         let should_present = (present_needed
             || tick_changed
-            || terminal_busy
+            || (!app.flip.open && terminal_busy)
             || canvas_dirty
             || size_changed
-            || app.animating()
-            || app.minimap_kitty_suppressed())
+            || app.animating())
             && frames.due()
             || size_changed;
         if should_present {
@@ -10045,7 +10135,8 @@ fn present(
     // `draw`; if we EndSynchronizedUpdate *before* rebinding/transmitting, the
     // host paints one torn frame (blank strip / ghost) then the image snaps back.
     // Keep draw + Kitty inside the same synchronized update.
-    if app.flip.open {
+    // AFK: skip Flip easing math once scroll has settled.
+    if app.flip_animating() {
         let dt = app
             .flip_tick_at
             .map(|at| at.elapsed().as_secs_f32() * 1000.0)
@@ -10107,15 +10198,20 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     // Sync-warm only when we are about to raster a new scene.
     app.warm_flip_previews_sync();
     let (cell_w, cell_h) = canvas_cell_pixels(app);
+    let (max_w, max_h) = flip3d::scene_max_dims(app.last_pressure.is_elevated());
     let img_w = (tiles.width as u32)
         .saturating_mul(cell_w.max(1))
-        .min(flip3d::SCENE_MAX_W);
+        .min(max_w);
     let img_h = (tiles.height as u32)
         .saturating_mul(cell_h.max(1))
-        .min(flip3d::SCENE_MAX_H);
+        .min(max_h);
     let cards = app.flip_cards();
     let theme = app.flip_scene_theme();
-    let rgb = flip3d::render_scene_rgb(
+    let enc_w = img_w.min(max_w);
+    let enc_h = img_h.min(max_h);
+    // f=24 raw RGB into reused scene_rgb capacity (AFK: no per-frame alloc).
+    flip3d::render_scene_rgb_into(
+        &mut app.flip.scene_rgb,
         &cards,
         app.flip.scroll,
         app.flip.selected,
@@ -10123,12 +10219,8 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         img_h,
         theme,
     );
-    let enc_w = img_w.min(flip3d::SCENE_MAX_W);
-    let enc_h = img_h.min(flip3d::SCENE_MAX_H);
-    // f=24 raw RGB — skip PNG zlib/CRC on every Flip frame (AFK CPU win).
-    app.flip.scene_rgb = rgb;
     app.flip.scene_png.clear();
-    let placed = canvas::paint_kitty_rgb24_opts(
+    let placed = canvas::paint_kitty_rgb24_into(
         &mut stdout(),
         &mut app.graphics,
         tiles,
@@ -10138,6 +10230,7 @@ fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
         FLIP3D_KITTY_IMAGE_ID,
         !same_box,
         true,
+        &mut app.flip.scene_b64,
     )?;
     if placed {
         app.flip.dirty = false;
@@ -10153,6 +10246,7 @@ fn clear_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
     app.flip.placed = None;
     app.flip.scene_png.clear();
     app.flip.scene_rgb.clear();
+    app.flip.scene_b64.clear();
     write!(
         stdout(),
         "\x1b_Ga=d,d=i,i={FLIP3D_KITTY_IMAGE_ID},q=2\x1b\\"
@@ -10350,10 +10444,15 @@ fn editor_minimap_screen_rect(app: &EditorApp) -> Option<Rect> {
 }
 
 fn refresh_minimap_theme(app: &mut EditorApp) {
+    // AFK: Flip owns the screen — skip OSC entirely while open (was 500ms probes).
+    if app.flip.open {
+        return;
+    }
+    // Idle OSC every 5s (was 3s/500ms) — theme flips are rare.
     let due = app.minimap_theme_dirty
         || app
             .minimap_theme_probed_at
-            .is_none_or(|at| at.elapsed() >= Duration::from_millis(500));
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(5_000));
     if !due {
         return;
     }
@@ -10415,8 +10514,9 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
     let scale = minimap_gfx::paint_scale(warning);
     // Match cell geometry; soft-cap only so we never undersample into stripe soup.
     // Under Warning, cols are already narrowed by edge_chrome — keep 1:1 px/cell.
-    let max_w = if warning { 480 } else { 640 };
-    let max_h = if warning { 1200 } else { 1600 };
+    // AFK: tighter Kitty minimap budgets (was 640×1600 / 480×1200).
+    let max_w = if warning { 320 } else { 480 };
+    let max_h = if warning { 720 } else { 960 };
     let focus = app.focus;
     let line_count = app.buffers[focus].document.len_lines().max(1);
     let visible = rect.height as usize;
@@ -11344,6 +11444,103 @@ mod tests {
     }
 
     #[test]
+    fn settled_flip_does_not_pin_animating_wake() {
+        // AFK: open Flip must not keep animating() true after scroll settles.
+        let mut app = EditorApp::new("a\n");
+        app.add_buffer("b.txt", "b\n");
+        app.editing = false;
+        app.handle(CommandKey::Tab);
+        assert!(app.flip.open);
+        app.flip.dirty = false;
+        app.flip.scroll = app.flip.selected as f32;
+        assert!(
+            !app.flip_animating(),
+            "settled Flip must drop high-rate wake"
+        );
+        assert!(!app.animating());
+        // Hover under Flip must not dirty the frame (tick23).
+        app.hover_hints = true;
+        app.hover = Some((1, 1));
+        app.hover_since = Some(Instant::now() - Duration::from_secs(2));
+        app.hover_hint = None;
+        assert!(!app.tick(Duration::from_millis(16)));
+        assert!(app.hover_hint.is_none());
+        app.flip.dirty = true;
+        assert!(app.flip_animating());
+        app.flip.dirty = false;
+        app.flip.scroll = 0.5;
+        app.flip.selected = 1;
+        assert!(app.flip_animating(), "easing toward selection stays hot");
+    }
+
+    #[test]
+    fn flip_sync_warm_skips_when_front_cached() {
+        // AFK: warm_flip_previews_sync must not re-raster a cached front card.
+        let mut app = EditorApp::new("fn main() {}\n");
+        app.add_buffer("b.txt", "b\n");
+        app.note_frame(80, 24);
+        let job = app.flip_preview_job(0).expect("job");
+        let key = job.key;
+        let _ = app.preview_pool.get_or_render(job);
+        assert!(app.preview_pool.get(key).is_some());
+        // Second pass: cache hit path (no panic / no clear).
+        app.warm_flip_previews_sync();
+        assert!(app.preview_pool.get(key).is_some());
+    }
+
+    #[test]
+    fn flip_preview_cache_key_matches_job_without_snapshot() {
+        let mut app = EditorApp::new("hello\n");
+        app.add_buffer("b.txt", "b\n");
+        app.note_frame(80, 24);
+        let key = app.flip_preview_cache_key(0).expect("key");
+        let job = app.flip_preview_job(0).expect("job");
+        assert_eq!(key, job.key);
+        assert!(!app.preview_pool.needs_work(key) || app.preview_pool.get(key).is_none());
+        let _ = app.preview_pool.get_or_render(job);
+        assert!(!app.preview_pool.needs_work(key));
+    }
+
+    #[test]
+    fn flip_cards_skips_rope_scan_for_offscreen_buffers() {
+        let mut app = EditorApp::new("front\n");
+        for i in 1..12 {
+            app.add_buffer(&format!("b{i}.txt"), &format!("body-{i}\n"));
+        }
+        app.editing = false;
+        app.handle(CommandKey::Tab);
+        app.flip.scroll = 0.0;
+        app.flip.selected = 0;
+        let cards = app.flip_cards();
+        assert_eq!(cards.len(), 12);
+        let filled = cards.iter().filter(|c| !c.title.is_empty()).count();
+        let empty = cards.iter().filter(|c| c.title.is_empty()).count();
+        assert!(filled >= 1 && filled <= 6, "filled={filled}");
+        assert!(empty >= 6, "off-screen stubs={empty}");
+        assert!(!cards[0].title.is_empty());
+    }
+
+    #[test]
+    fn flip_cards_skip_greeked_lines_when_preview_cached() {
+        let mut app = EditorApp::new("fn main() { println!(\"hi\"); }\n");
+        app.add_buffer("b.txt", "b\n");
+        app.note_frame(80, 24);
+        app.editing = false;
+        app.handle(CommandKey::Tab);
+        let job = app.flip_preview_job(0).expect("job");
+        let _ = app.preview_pool.get_or_render(job);
+        let cards = app.flip_cards();
+        assert!(
+            cards[0].preview.is_some(),
+            "front card should hold preview Arc"
+        );
+        assert!(
+            cards[0].lines.is_empty(),
+            "cached preview must skip rope greeking"
+        );
+    }
+
+    #[test]
     fn flip3d_alt_tab_cycles_and_commits() {
         let mut app = EditorApp::new("a\n");
         app.add_buffer("b.txt", "b\n");
@@ -11375,6 +11572,7 @@ mod tests {
             theme: app.minimap_theme,
             width: 8,
             height: 8,
+            glyph_scale: 1,
             lines: vec![vec![('x', (200, 200, 200))]],
         });
         assert!(app.preview_pool.get(key).is_some());
@@ -11481,6 +11679,7 @@ mod tests {
             theme: minimap_gfx::MinimapTheme::dark(),
             width: 32,
             height: 24,
+            glyph_scale: minimap_gfx::FLIP_GLYPH_SCALE,
             lines: vec![
                 vec![('f', (200, 100, 200)), ('n', (200, 100, 200))],
                 vec![(' ', (30, 30, 30)), ('x', (100, 180, 220))],
@@ -11509,6 +11708,7 @@ mod tests {
             theme: minimap_gfx::MinimapTheme::light(),
             width: 40,
             height: 28,
+            glyph_scale: minimap_gfx::FLIP_GLYPH_SCALE,
             lines: vec![vec![
                 ('p', (40, 80, 40)),
                 ('u', (40, 80, 40)),

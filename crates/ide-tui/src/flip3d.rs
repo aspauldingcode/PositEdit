@@ -14,8 +14,15 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Kitty image id for the switcher scene (away from Help/Canvas/minimap).
 pub const FLIP3D_KITTY_IMAGE_ID: u32 = 91;
 
-const SCROLL_TIME_CONSTANT_MS: f32 = 70.0;
-const VISIBLE_WINDOWS: usize = 7;
+/// AFK tick24: snappier settle (was 70) — fewer easing frames per flip.
+const SCROLL_TIME_CONSTANT_MS: f32 = 48.0;
+/// AFK: blit at most 4 stack cards (was 5/7) — deeper stack was free raster work.
+const VISIBLE_WINDOWS: usize = 4;
+/// How many Flip cards to warm around the selection (async queue bound).
+/// AFK tick20: ±1 (≤3 keys) — visible stack already limits blit work.
+pub const WARM_RADIUS: i32 = 1;
+/// Under memory pressure, only warm the front card (±0 via radius 0 in sync path).
+pub const WARM_RADIUS_PRESSURE: i32 = 0;
 const TURN_DEGREES: f32 = 20.0;
 const PITCH_DEGREES: f32 = 6.0;
 const FRONT_X: f32 = 0.13;
@@ -27,9 +34,21 @@ const FRONT_MAX_WIDTH: f32 = 0.5;
 const FRONT_MAX_HEIGHT: f32 = 0.5;
 const CAMERA_FOV_DEGREES: f32 = 28.0;
 /// Cap Kitty scene pixels so flip frames stay cheap (PNG+base64 bound).
-/// AFK: 480×300 (~28% fewer RGB bytes than 560×360) — still sharp on laptop cells.
-pub const SCENE_MAX_W: u32 = 480;
-pub const SCENE_MAX_H: u32 = 300;
+/// AFK tick22: 320×200 (~68% fewer RGB bytes than 560×360) — still sharp on laptop cells.
+pub const SCENE_MAX_W: u32 = 320;
+pub const SCENE_MAX_H: u32 = 200;
+/// Under elevated memory pressure, raster a smaller Flip scene.
+pub const SCENE_PRESSURE_W: u32 = 240;
+pub const SCENE_PRESSURE_H: u32 = 140;
+
+/// Scene pixel caps for normal vs elevated memory pressure.
+pub fn scene_max_dims(elevated_pressure: bool) -> (u32, u32) {
+    if elevated_pressure {
+        (SCENE_PRESSURE_W, SCENE_PRESSURE_H)
+    } else {
+        (SCENE_MAX_W, SCENE_MAX_H)
+    }
+}
 
 /// Terminal-derived colors for the Flip scene (from OSC/minimap theme).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +121,8 @@ pub struct FlipSwitcher {
     /// Cached last PNG so settled frames can rebind placeholders without re-encode.
     pub scene_png: Vec<u8>,
     pub scene_rgb: Vec<u8>,
+    /// Reused base64 scratch for Kitty `f=24` transmits (AFK: avoid per-frame String).
+    pub scene_b64: String,
 }
 
 impl Default for FlipSwitcher {
@@ -115,6 +136,7 @@ impl Default for FlipSwitcher {
             placed: None,
             scene_png: Vec::new(),
             scene_rgb: Vec::new(),
+            scene_b64: String::new(),
         }
     }
 }
@@ -167,7 +189,39 @@ impl FlipSwitcher {
         self.scene_png.shrink_to_fit();
         self.scene_rgb.clear();
         self.scene_rgb.shrink_to_fit();
+        self.scene_b64.clear();
+        self.scene_b64.shrink_to_fit();
     }
+}
+
+/// Buffer indices to warm for Flip cards around `selected` (wraps).
+pub fn warm_indices(selected: usize, count: usize, radius: i32) -> Vec<usize> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let selected = selected.min(count - 1);
+    let radius = radius.max(0);
+    let mut out = Vec::with_capacity((radius as usize) * 2 + 1);
+    for delta in -radius..=radius {
+        let index = (selected as i32 + delta).rem_euclid(count as i32) as usize;
+        if !out.contains(&index) {
+            out.push(index);
+        }
+    }
+    out
+}
+
+/// Buffer indices whose cards are on-screen for the current Flip scroll.
+pub fn visible_card_indices(scroll: f32, count: usize) -> Vec<usize> {
+    if count == 0 {
+        return Vec::new();
+    }
+    (0..count)
+        .filter(|&i| {
+            let slot = slot_of(i, scroll, count);
+            slot >= -0.6 && slot <= VISIBLE_WINDOWS as f32
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -269,22 +323,47 @@ pub fn render_scene_rgb(
     height: u32,
     theme: SceneTheme,
 ) -> Vec<u8> {
+    let mut rgb = Vec::new();
+    render_scene_rgb_into(&mut rgb, cards, scroll, selected, width, height, theme);
+    rgb
+}
+
+/// Raster Flip into `out`, reusing capacity across frames (AFK alloc win).
+pub fn render_scene_rgb_into(
+    out: &mut Vec<u8>,
+    cards: &[BufferCard],
+    scroll: f32,
+    selected: usize,
+    width: u32,
+    height: u32,
+    theme: SceneTheme,
+) {
     let w = width.max(2).min(SCENE_MAX_W) as usize;
     let h = height.max(2).min(SCENE_MAX_H) as usize;
-    let mut rgb = vec![0u8; w * h * 3];
-    for px in rgb.chunks_exact_mut(3) {
-        px[0] = theme.backdrop.0;
-        px[1] = theme.backdrop.1;
-        px[2] = theme.backdrop.2;
+    let need = w.saturating_mul(h).saturating_mul(3);
+    // AFK: keep capacity across frames; avoid clear→zero→backdrop double write.
+    if out.len() != need {
+        out.resize(need, 0);
+    }
+    let (br, bg, bb) = theme.backdrop;
+    if br == bg && bg == bb {
+        out.fill(br);
+    } else {
+        for px in out.chunks_exact_mut(3) {
+            px[0] = br;
+            px[1] = bg;
+            px[2] = bb;
+        }
     }
     if cards.is_empty() {
-        return rgb;
+        return;
     }
     let count = cards.len();
     let card_w = ((w as f32) * FRONT_MAX_WIDTH).max(40.0);
     let card_h = ((h as f32) * FRONT_MAX_HEIGHT).max(24.0);
-    // Paint back-to-front (largest slot first).
-    let mut order: Vec<(usize, f32)> = (0..count)
+    // AFK: only sort on-screen slots (was O(n log n) over every open buffer).
+    let mut order: Vec<(usize, f32)> = visible_card_indices(scroll, count)
+        .into_iter()
         .map(|i| (i, slot_of(i, scroll, count)))
         .collect();
     order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -297,7 +376,7 @@ pub fn render_scene_rgb(
             continue;
         }
         blit_card(
-            &mut rgb,
+            out,
             w,
             h,
             &cards[index],
@@ -308,7 +387,6 @@ pub fn render_scene_rgb(
             theme,
         );
     }
-    rgb
 }
 
 fn blit_card(
@@ -339,27 +417,37 @@ fn blit_card(
         theme.border
     };
     let title_chars: Vec<char> = card.title.chars().collect();
+    // AFK: front full density; near-back ½; deep-stack ⅓ (opacity already low).
+    let step: i32 = if selected {
+        1
+    } else if alpha < 0.55 {
+        3
+    } else {
+        2
+    };
+    let opaque = alpha >= 0.995;
 
-    for row in 0..px_h {
+    for row in (0..px_h).step_by(step as usize) {
         let v = row as f32 / px_h.max(1) as f32;
         let row_scale = 1.0 - v * pitch;
         let row_w = cw * row_scale;
         let y = cy - ch * 0.5 + v * ch;
         let x0 = cx - row_w * 0.5 + (v - 0.5) * cw * shear;
         let row_px = row_w.ceil().max(1.0) as i32;
-        for col in 0..row_px {
+        for col in (0..row_px).step_by(step as usize) {
             let u = col as f32 / row_px.max(1) as f32;
             let x = x0 + u * row_w;
             let (px, py) = (x.round() as isize, y.round() as isize);
             if px < 0 || py < 0 || px as usize >= w || py as usize >= h {
                 continue;
             }
-            let edge = row == 0 || row + 1 == px_h || col == 0 || col + 1 == row_px;
+            let edge = row == 0 || row + 1 >= px_h || col == 0 || col + 1 >= row_px;
             let (r, g, b) = if edge {
                 border
             } else if v < 0.12 {
                 // Title bar: paper strip + ink for name glyphs (block samples).
-                let ti = ((u * title_chars.len().max(1) as f32) as usize).min(title_chars.len().saturating_sub(1));
+                let ti = ((u * title_chars.len().max(1) as f32) as usize)
+                    .min(title_chars.len().saturating_sub(1));
                 if !title_chars.is_empty() && title_chars[ti] != ' ' && (col + row) % 2 == 0 {
                     theme.title_fg
                 } else {
@@ -370,9 +458,10 @@ fn blit_card(
                 let body_v = ((v - 0.12) / 0.88).clamp(0.0, 1.0);
                 card_body_pixel(card, u, body_v, theme)
             };
-            put_blend(rgb, w, px as usize, py as usize, r, g, b, alpha);
-            if col + 1 == row_px {
-                put_blend(
+            put_pixel(rgb, w, px as usize, py as usize, r, g, b, alpha, opaque);
+            // Edge shadow only on the focused front card.
+            if selected && col + step >= row_px {
+                put_pixel(
                     rgb,
                     w,
                     (px as usize).saturating_add(1).min(w - 1),
@@ -381,6 +470,7 @@ fn blit_card(
                     g.saturating_sub(30),
                     b.saturating_sub(30),
                     alpha * 0.75,
+                    false,
                 );
             }
         }
@@ -424,9 +514,25 @@ fn sample_preview(
     (preview.rgb[i], preview.rgb[i + 1], preview.rgb[i + 2])
 }
 
-fn put_blend(rgb: &mut [u8], w: usize, x: usize, y: usize, r: u8, g: u8, b: u8, a: f32) {
+fn put_pixel(
+    rgb: &mut [u8],
+    w: usize,
+    x: usize,
+    y: usize,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: f32,
+    opaque: bool,
+) {
     let i = (y * w + x) * 3;
     if i + 2 >= rgb.len() {
+        return;
+    }
+    if opaque {
+        rgb[i] = r;
+        rgb[i + 1] = g;
+        rgb[i + 2] = b;
         return;
     }
     let a = a.clamp(0.0, 1.0);
@@ -563,18 +669,85 @@ mod tests {
     }
 
     #[test]
+    fn warm_indices_bounds_queue_around_selection() {
+        assert_eq!(warm_indices(0, 0, 3), Vec::<usize>::new());
+        assert_eq!(warm_indices(2, 5, 1), vec![1, 2, 3]);
+        let wrapped = warm_indices(0, 4, 1);
+        assert_eq!(wrapped, vec![3, 0, 1]);
+        assert_eq!(warm_indices(5, 20, WARM_RADIUS).len(), 3);
+        assert_eq!(warm_indices(0, 20, WARM_RADIUS_PRESSURE).len(), 1);
+    }
+
+    #[test]
+    fn visible_card_indices_caps_on_screen_stack() {
+        assert!(visible_card_indices(0.0, 0).is_empty());
+        let twenty = visible_card_indices(0.0, 20);
+        assert!(
+            twenty.len() <= VISIBLE_WINDOWS + 1,
+            "only on-screen slots, got {}",
+            twenty.len()
+        );
+        assert!(twenty.contains(&0));
+    }
+
+    #[test]
+    fn render_scene_rgb_into_reuses_capacity() {
+        let theme = SceneTheme::from_rgb((30, 30, 36), (200, 200, 210), false);
+        let need = (SCENE_MAX_W * SCENE_MAX_H * 3) as usize;
+        let mut buf = Vec::with_capacity(need);
+        render_scene_rgb_into(&mut buf, &[], 0.0, 0, SCENE_MAX_W, SCENE_MAX_H, theme);
+        let cap = buf.capacity();
+        assert_eq!(buf.len(), need);
+        render_scene_rgb_into(&mut buf, &[], 0.0, 0, SCENE_MAX_W, SCENE_MAX_H, theme);
+        assert_eq!(buf.capacity(), cap, "second raster must reuse Vec capacity");
+    }
+
+    #[test]
+    fn back_stack_cards_still_paint_with_half_rate_blit() {
+        let theme = SceneTheme::from_rgb((20, 20, 24), (220, 220, 230), false);
+        let cards = vec![
+            BufferCard {
+                title: "a.rs".into(),
+                lines: vec!["aaa".into()],
+                active: true,
+                preview: None,
+            },
+            BufferCard {
+                title: "b.rs".into(),
+                lines: vec!["bbb".into()],
+                active: false,
+                preview: None,
+            },
+            BufferCard {
+                title: "c.rs".into(),
+                lines: vec!["ccc".into()],
+                active: false,
+                preview: None,
+            },
+        ];
+        let rgb = render_scene_rgb(&cards, 0.0, 0, 160, 100, theme);
+        assert_eq!(rgb.len(), 160 * 100 * 3);
+        // Backdrop is dark; cards must write some lighter paper/border pixels.
+        let lit = rgb.chunks(3).filter(|p| p[0] > 40 || p[1] > 40 || p[2] > 40).count();
+        assert!(lit > 200, "half-rate back blit must still cover cards ({lit} lit)");
+    }
+
+    #[test]
     fn close_frees_scene_rgb_buffers() {
         let mut sw = FlipSwitcher::default();
         sw.open_at(0, 2);
         sw.scene_rgb = vec![7u8; 12_000];
         sw.scene_png = vec![9u8; 400];
+        sw.scene_b64 = "AAAA".repeat(1000);
         sw.placed = Some((1, 2, 3, 4));
         sw.close();
         assert!(!sw.open);
         assert!(sw.scene_rgb.is_empty());
         assert!(sw.scene_png.is_empty());
+        assert!(sw.scene_b64.is_empty());
         assert_eq!(sw.scene_rgb.capacity(), 0);
         assert_eq!(sw.scene_png.capacity(), 0);
+        assert_eq!(sw.scene_b64.capacity(), 0);
         assert!(sw.placed.is_none());
     }
 
@@ -651,6 +824,9 @@ mod tests {
             (SCENE_MAX_W * SCENE_MAX_H * 3) as usize,
             "oversized requests must clamp"
         );
+        assert_eq!(scene_max_dims(false), (SCENE_MAX_W, SCENE_MAX_H));
+        assert_eq!(scene_max_dims(true), (SCENE_PRESSURE_W, SCENE_PRESSURE_H));
+        assert!(SCENE_PRESSURE_W * SCENE_PRESSURE_H < SCENE_MAX_W * SCENE_MAX_H);
     }
 
     #[test]

@@ -174,7 +174,8 @@ pub struct FrameClock {
 
 impl FrameClock {
     pub fn new(max_fps: u32) -> Self {
-        let fps = max_fps.clamp(30, 120);
+        // AFK: allow 24 Hz ceiling (was hard-clamped to 30).
+        let fps = max_fps.clamp(24, 120);
         Self {
             last_present: Instant::now()
                 .checked_sub(Duration::from_secs(1))
@@ -272,6 +273,15 @@ mod tests {
                 KeyCode::Char('c')
             ]
         );
+    }
+
+    #[test]
+    fn frame_clock_afk_ceiling_is_24hz() {
+        let clock = FrameClock::new(24);
+        assert_eq!(clock.min_frame, Duration::from_nanos(1_000_000_000 / 24));
+        // Clamp floor is 24 — requesting lower still yields 24 Hz.
+        let floor = FrameClock::new(15);
+        assert_eq!(floor.min_frame, Duration::from_nanos(1_000_000_000 / 24));
     }
 
     #[test]
