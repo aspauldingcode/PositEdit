@@ -670,12 +670,12 @@ fn sample_color(ch: char, theme: MinimapTheme) -> (u8, u8, u8) {
 
 /// Flip-card preview size (minimap glyph pipeline, wider aspect for 3D cards).
 /// Scale-2 glyphs need room — 1× 5×7 looked like TV static when sampled onto cards.
-/// AFK tick22: 280×176 (~58% fewer RGB bytes than 420×280) keeps cards legible.
-pub const FLIP_CARD_W: u32 = 280;
-pub const FLIP_CARD_H: u32 = 176;
+/// AFK tick25: 240×150 (~70% fewer RGB bytes than 420×280) keeps cards legible.
+pub const FLIP_CARD_W: u32 = 240;
+pub const FLIP_CARD_H: u32 = 150;
 /// Under elevated memory pressure — smaller still.
-pub const FLIP_CARD_PRESSURE_W: u32 = 168;
-pub const FLIP_CARD_PRESSURE_H: u32 = 108;
+pub const FLIP_CARD_PRESSURE_W: u32 = 144;
+pub const FLIP_CARD_PRESSURE_H: u32 = 90;
 pub const FLIP_GLYPH_SCALE: u32 = 2;
 
 /// Flip preview bitmap size for normal vs elevated pressure.
@@ -1013,11 +1013,11 @@ mod tests {
     #[test]
     fn flip_preview_uses_double_scale_glyphs() {
         assert!(FLIP_GLYPH_SCALE >= 2, "1× Flip glyphs read as TV static");
-        assert_eq!(FLIP_CARD_W, 280);
-        assert_eq!(FLIP_CARD_H, 176);
+        assert_eq!(FLIP_CARD_W, 240);
+        assert_eq!(FLIP_CARD_H, 150);
         assert!(
-            FLIP_CARD_W * FLIP_CARD_H * 3 < 320 * 200 * 3,
-            "AFK card must stay under the prior 320×200 RGB budget"
+            FLIP_CARD_W * FLIP_CARD_H * 3 < 280 * 176 * 3,
+            "AFK card must stay under the prior 280×176 RGB budget"
         );
         assert!(PREVIEW_POOL_CAP <= 3);
         assert_eq!(flip_card_dims(false), (FLIP_CARD_W, FLIP_CARD_H));

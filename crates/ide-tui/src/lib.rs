@@ -3725,6 +3725,15 @@ impl EditorApp {
         closed > 0 || self.terminals.wants_poll()
     }
 
+    /// AFK: while Flip is open, only drain PTY buffers — no resize/ensure work.
+    fn maintain_terminal_drain_only(&mut self) -> bool {
+        let closed = self.terminals.drain();
+        if closed > 0 {
+            self.notice = "terminal closed".to_string();
+        }
+        closed > 0
+    }
+
     fn on_terminal_seam(&self, column: u16, row: u16) -> bool {
         let rect = self.terminal_rect();
         if rect.height == 0 {
@@ -9323,8 +9332,8 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         let wait = if present_needed && frames.due() {
             Duration::ZERO
         } else if app.animating()
-            || app.terminals.wants_poll()
-            // AFK: markdown/help preview workers must not pin 8ms wakes during Flip.
+            // AFK tick25: PTY/markdown must not pin 8ms wakes during Flip.
+            || (!app.flip.open && app.terminals.wants_poll())
             || (!app.flip.open && app.preview_engine.busy())
         {
             frames.wait_hint().max(Duration::from_millis(8))
@@ -9333,7 +9342,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
             Duration::from_millis(55)
         } else if app.flip.open {
             // Settled Flip: wake for async preview completion, not 60 Hz raster.
-            Duration::from_millis(350)
+            Duration::from_millis(400)
         } else if let Some(hint_wait) = app.hover_hint_wait() {
             hint_wait
         } else if app.terminals.open {
@@ -9347,7 +9356,7 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
                 .min(Duration::from_millis(100))
         } else {
             // Fully idle editor: wake less often (AFK battery / CPU).
-            Duration::from_millis(750)
+            Duration::from_millis(1000)
         };
 
         let mut raw = Vec::new();
@@ -9392,9 +9401,16 @@ pub fn run(path: Option<&str>) -> io::Result<()> {
         app.note_frame(size.width, size.height);
         let size_changed = (app.width, app.height) != prev_size || batch.resized;
         let tick_changed = app.tick(dt);
-        let terminal_busy = app.maintain_terminal();
+        // AFK tick25: Flip owns the frame — drain PTY only, skip resize/ensure.
+        let terminal_busy = if app.flip.open {
+            app.maintain_terminal_drain_only()
+        } else {
+            app.maintain_terminal()
+        };
         if let Some(server) = control.as_ref() {
-            server.poll(&mut app);
+            if !app.flip.open {
+                server.poll(&mut app);
+            }
         }
         // Async edocview: never wait on pandoc/typst/pymupdf here — only apply
         // finished pages and schedule the next present.
@@ -10514,9 +10530,9 @@ fn paint_editor_minimap_graphics(app: &mut EditorApp) -> io::Result<()> {
     let scale = minimap_gfx::paint_scale(warning);
     // Match cell geometry; soft-cap only so we never undersample into stripe soup.
     // Under Warning, cols are already narrowed by edge_chrome — keep 1:1 px/cell.
-    // AFK: tighter Kitty minimap budgets (was 640×1600 / 480×1200).
-    let max_w = if warning { 320 } else { 480 };
-    let max_h = if warning { 720 } else { 960 };
+    // AFK tick25: tighter Kitty minimap budgets (was 640×1600 / 480×960).
+    let max_w = if warning { 280 } else { 400 };
+    let max_h = if warning { 640 } else { 800 };
     let focus = app.focus;
     let line_count = app.buffers[focus].document.len_lines().max(1);
     let visible = rect.height as usize;

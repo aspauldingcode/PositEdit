@@ -34,12 +34,12 @@ const FRONT_MAX_WIDTH: f32 = 0.5;
 const FRONT_MAX_HEIGHT: f32 = 0.5;
 const CAMERA_FOV_DEGREES: f32 = 28.0;
 /// Cap Kitty scene pixels so flip frames stay cheap (PNG+base64 bound).
-/// AFK tick22: 320×200 (~68% fewer RGB bytes than 560×360) — still sharp on laptop cells.
-pub const SCENE_MAX_W: u32 = 320;
-pub const SCENE_MAX_H: u32 = 200;
+/// AFK tick25: 288×180 (~74% fewer RGB bytes than 560×360) — still sharp on laptop cells.
+pub const SCENE_MAX_W: u32 = 288;
+pub const SCENE_MAX_H: u32 = 180;
 /// Under elevated memory pressure, raster a smaller Flip scene.
-pub const SCENE_PRESSURE_W: u32 = 240;
-pub const SCENE_PRESSURE_H: u32 = 140;
+pub const SCENE_PRESSURE_W: u32 = 216;
+pub const SCENE_PRESSURE_H: u32 = 120;
 
 /// Scene pixel caps for normal vs elevated memory pressure.
 pub fn scene_max_dims(elevated_pressure: bool) -> (u32, u32) {
