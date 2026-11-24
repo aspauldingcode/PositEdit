@@ -4,8 +4,8 @@
 //! when the OS is under jetsam / memory pressure.
 
 /// Default undo/redo depth in normal conditions.
-/// AFK tick23: 40 (was 48/64) — rope snapshots dominate idle RSS.
-pub const HISTORY_NORMAL: usize = 40;
+/// AFK tick26: 32 (was 40/48/64) — rope snapshots dominate idle RSS.
+pub const HISTORY_NORMAL: usize = 32;
 /// Aggressive depth when the OS reports elevated memory pressure.
 pub const HISTORY_PRESSURE: usize = 8;
 /// Hard ceiling — never retain more than this many snapshots.
@@ -171,7 +171,7 @@ mod tests {
     fn history_limits_tighten_under_pressure() {
         assert!(PressureLevel::Normal.history_limit() > PressureLevel::Urgent.history_limit());
         assert_eq!(PressureLevel::Critical.history_limit(), HISTORY_PRESSURE);
-        assert_eq!(HISTORY_NORMAL, 40);
+        assert_eq!(HISTORY_NORMAL, 32);
         assert!(HISTORY_HARD_MAX <= 96);
         assert_eq!(PressureLevel::Warning.history_limit(), 16);
         assert_eq!(PressureLevel::Normal.scrollback_limit(), 240);

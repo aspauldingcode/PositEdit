@@ -2327,7 +2327,10 @@ impl EditorApp {
         } else if self.tile_drag.is_none() {
             self.target = window.origin(self.focus) as f32;
         }
-        self.refresh_gutter_git();
+        // AFK tick26: Flip covers the editor — skip git gutter probes until close.
+        if !self.flip.open {
+            self.refresh_gutter_git();
+        }
     }
 
     pub fn tick(&mut self, dt: Duration) -> bool {
@@ -3281,61 +3284,53 @@ impl EditorApp {
     fn flip_cards(&self) -> Vec<flip3d::BufferCard> {
         let theme_fp = self.minimap_theme.fingerprint;
         let count = self.buffers.len();
-        // AFK: only rope-scan / preview-lookup cards that are on-screen.
-        // Off-screen stubs keep slot indices stable for render_scene_rgb.
-        let visible: std::collections::HashSet<usize> =
-            flip3d::visible_card_indices(self.flip.scroll, count)
-                .into_iter()
-                .collect();
-        self.buffers
-            .iter()
-            .enumerate()
-            .map(|(index, buffer)| {
-                if !visible.contains(&index) {
-                    return flip3d::BufferCard {
-                        title: String::new(),
-                        lines: Vec::new(),
-                        active: false,
-                        preview: None,
-                    };
-                }
-                // Pool lookup even without a Kitty host — tests + text fallback share Arcs.
-                let elevated = self.last_pressure.is_elevated();
-                let (cw, ch) = minimap_gfx::flip_card_dims(elevated);
-                let scale = minimap_gfx::flip_glyph_scale(elevated);
-                let key = minimap_gfx::preview_key(
-                    index,
-                    buffer.document.revision() ^ (u64::from(scale) << 56),
-                    theme_fp,
-                    cw,
-                    ch,
-                );
-                let preview = self.preview_pool.get(key);
-                // AFK: greeked rope lines are only a fallback while the preview Arc loads.
-                let lines = if preview.is_some() {
-                    Vec::new()
-                } else {
-                    // AFK tick23: shorter greeked fallback (preview Arc usually lands first).
-                    let text = buffer.text();
-                    text.lines()
-                        .take(6)
-                        .map(|line| {
-                            let mut s: String = line.chars().take(28).collect();
-                            if s.is_empty() {
-                                s.push(' ');
-                            }
-                            s
-                        })
-                        .collect()
-                };
-                flip3d::BufferCard {
-                    title: buffer.name.clone(),
-                    lines,
-                    active: index == self.focus,
-                    preview,
-                }
+        // AFK tick26: stub all slots, fill only on-screen — no HashSet per frame.
+        let mut cards: Vec<flip3d::BufferCard> = (0..count)
+            .map(|_| flip3d::BufferCard {
+                title: String::new(),
+                lines: Vec::new(),
+                active: false,
+                preview: None,
             })
-            .collect()
+            .collect();
+        let elevated = self.last_pressure.is_elevated();
+        let (cw, ch) = minimap_gfx::flip_card_dims(elevated);
+        let scale = minimap_gfx::flip_glyph_scale(elevated);
+        for index in flip3d::visible_card_indices(self.flip.scroll, count) {
+            let Some(buffer) = self.buffers.get(index) else {
+                continue;
+            };
+            let key = minimap_gfx::preview_key(
+                index,
+                buffer.document.revision() ^ (u64::from(scale) << 56),
+                theme_fp,
+                cw,
+                ch,
+            );
+            let preview = self.preview_pool.get(key);
+            let lines = if preview.is_some() {
+                Vec::new()
+            } else {
+                let text = buffer.text();
+                text.lines()
+                    .take(6)
+                    .map(|line| {
+                        let mut s: String = line.chars().take(28).collect();
+                        if s.is_empty() {
+                            s.push(' ');
+                        }
+                        s
+                    })
+                    .collect()
+            };
+            cards[index] = flip3d::BufferCard {
+                title: buffer.name.clone(),
+                lines,
+                active: index == self.focus,
+                preview,
+            };
+        }
+        cards
     }
 
     /// Cache key only — no rope/highlight snapshot (AFK schedule hot path).
@@ -10145,8 +10140,10 @@ fn present(
     app: &mut EditorApp,
 ) -> io::Result<()> {
     // Prefer Kitty whenever TERM/TERM_PROGRAM/Ghostty say so — glyph minimap
-    // is only the non-Kitty fallback.
-    app.graphics.prefer_kitty_from_env();
+    // is only the non-Kitty fallback. AFK: skip re-probe once Flip already owns Kitty.
+    if !(app.flip.open && app.graphics.backend() == graphics::GraphicsBackend::Kitty) {
+        app.graphics.prefer_kitty_from_env();
+    }
     // Kitty virtual placements are cell-bound. Ratatui may blank those cells in
     // `draw`; if we EndSynchronizedUpdate *before* rebinding/transmitting, the
     // host paints one torn frame (blank strip / ghost) then the image snaps back.
@@ -10192,7 +10189,7 @@ fn present(
 }
 
 fn paint_flip_graphics(app: &mut EditorApp) -> io::Result<()> {
-    app.graphics.prefer_kitty_from_env();
+    // Backend already preferred in present(); avoid re-probing env every Flip frame.
     if cfg!(test) || app.graphics.backend() != graphics::GraphicsBackend::Kitty {
         return Ok(());
     }

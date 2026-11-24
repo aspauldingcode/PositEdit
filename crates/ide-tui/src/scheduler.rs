@@ -193,9 +193,8 @@ impl FrameClock {
     }
 
     pub fn wait_hint(&self) -> Duration {
-        self.min_frame
-            .saturating_sub(self.last_present.elapsed())
-            .min(Duration::from_millis(16))
+        // AFK tick26: honour the full frame period (was capped at 16ms → ~60 Hz wake).
+        self.min_frame.saturating_sub(self.last_present.elapsed())
     }
 }
 
@@ -282,6 +281,9 @@ mod tests {
         // Clamp floor is 24 — requesting lower still yields 24 Hz.
         let floor = FrameClock::new(15);
         assert_eq!(floor.min_frame, Duration::from_nanos(1_000_000_000 / 24));
+        // wait_hint must not re-introduce a 16ms (~60 Hz) wake cap.
+        assert!(clock.wait_hint() <= clock.min_frame);
+        assert!(clock.min_frame > Duration::from_millis(16));
     }
 
     #[test]
