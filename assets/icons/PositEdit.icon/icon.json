@@ -1,0 +1,110 @@
+{
+  "features": [
+    "refractivity",
+    "specular-location"
+  ],
+  "fill-specializations": [
+    {
+      "value": {
+        "automatic-gradient": "extended-srgb:0.18,0.14,0.10,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "extended-srgb:0.05,0.05,0.06,1.00000"
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": "automatic"
+    }
+  ],
+  "groups": [
+    {
+      "blur-material": 0.72,
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "linear-gradient": [
+                  "display-p3:0.98,0.92,0.78,1.00000",
+                  "display-p3:0.88,0.62,0.22,1.00000"
+                ],
+                "orientation": {
+                  "start": {
+                    "x": 0.2,
+                    "y": 0.0
+                  },
+                  "stop": {
+                    "x": 0.8,
+                    "y": 1.0
+                  }
+                }
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "linear-gradient": [
+                  "display-p3:0.95,0.82,0.55,1.00000",
+                  "display-p3:0.72,0.42,0.12,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": true,
+          "image-name": "posit-edit-shape.png",
+          "name": "PE Shape",
+          "opacity": 0.96
+        }
+      ],
+      "lighting": "combined",
+      "name": "Symbol",
+      "refractivity": {
+        "depth": 0.68,
+        "enabled": true,
+        "strength": 0.74
+      },
+      "shadow-specializations": [
+        {
+          "value": {
+            "kind": "neutral",
+            "opacity": 0.35
+          }
+        },
+        {
+          "appearance": "light",
+          "value": {
+            "kind": "layer-color",
+            "opacity": 0.4
+          }
+        },
+        {
+          "appearance": "dark",
+          "value": {
+            "kind": "layer-color",
+            "opacity": 0.55
+          }
+        }
+      ],
+      "specular": true,
+      "specular-highlight-placement": "outside",
+      "translucency": {
+        "enabled": true,
+        "value": 0.58
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

@@ -31,6 +31,7 @@ pub enum DapState {
 pub struct DapCapabilities {
     pub supports_configuration_done: bool,
     pub supports_step_back: bool,
+    pub supports_read_memory: bool,
 }
 
 #[derive(Debug)]
@@ -111,6 +112,65 @@ impl DapSession {
         Ok(self.request("stepBack", json!({})))
     }
 
+    pub fn set_breakpoints(
+        &mut self,
+        source_path: &str,
+        lines: &[u32],
+    ) -> Result<String, DapError> {
+        if !matches!(
+            self.state,
+            DapState::Initialized | DapState::Configured | DapState::Running | DapState::Stopped
+        ) {
+            return Err(DapError::WrongState);
+        }
+        let breakpoints: Vec<Value> = lines
+            .iter()
+            .map(|line| json!({"line": line}))
+            .collect();
+        Ok(self.request(
+            "setBreakpoints",
+            json!({
+                "source": {"path": source_path},
+                "breakpoints": breakpoints
+            }),
+        ))
+    }
+
+    pub fn stack_trace(&mut self, thread_id: i64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        Ok(self.request("stackTrace", json!({ "threadId": thread_id })))
+    }
+
+    pub fn continue_exec(&mut self, thread_id: i64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        self.state = DapState::Running;
+        Ok(self.request("continue", json!({ "threadId": thread_id })))
+    }
+
+    pub fn capabilities(&self) -> &DapCapabilities {
+        &self.capabilities
+    }
+
+    pub fn read_memory(&mut self, memory_reference: &str, count: u64) -> Result<String, DapError> {
+        if self.state != DapState::Stopped {
+            return Err(DapError::WrongState);
+        }
+        if !self.capabilities.supports_read_memory {
+            return Err(DapError::Unsupported("readMemory"));
+        }
+        Ok(self.request(
+            "readMemory",
+            json!({
+                "memoryReference": memory_reference,
+                "count": count
+            }),
+        ))
+    }
+
     pub fn push_adapter(&mut self, payload: &str) -> Result<(), DapError> {
         let value: Value = serde_json::from_str(payload).map_err(|_| DapError::Malformed)?;
         let kind = value
@@ -129,6 +189,8 @@ impl DapSession {
                     .unwrap_or(false);
                 self.capabilities.supports_step_back =
                     body["supportsStepBack"].as_bool().unwrap_or(false);
+                self.capabilities.supports_read_memory =
+                    body["supportsReadMemoryRequest"].as_bool().unwrap_or(false);
                 self.state = DapState::Initialized;
             }
             "event" => self.on_event(
@@ -218,6 +280,46 @@ mod tests {
             .push_adapter(r#"{"seq":3,"type":"event","event":"terminated"}"#)
             .unwrap();
         assert_eq!(session.state(), DapState::Exited);
+    }
+
+    #[test]
+    fn breakpoints_and_continue_from_stopped() {
+        let mut session = DapSession::new();
+        session.initialize().unwrap();
+        session
+            .push_adapter(r#"{"seq":1,"type":"response","command":"initialize","success":true,"body":{}}"#)
+            .unwrap();
+        let bp = session.set_breakpoints("main.rs", &[3, 9]).unwrap();
+        assert!(bp.contains("setBreakpoints"));
+        session.launch("./app").unwrap();
+        session
+            .push_adapter(
+                r#"{"seq":2,"type":"event","event":"stopped","body":{"reason":"breakpoint","threadId":1}}"#,
+            )
+            .unwrap();
+        assert!(session.stack_trace(1).unwrap().contains("stackTrace"));
+        session.continue_exec(1).unwrap();
+        assert_eq!(session.state(), DapState::Running);
+    }
+
+    #[test]
+    fn read_memory_requires_advertised_capability() {
+        let mut session = DapSession::new();
+        session.initialize().unwrap();
+        session
+            .push_adapter(r#"{"seq":1,"type":"response","command":"initialize","success":true,"body":{}}"#)
+            .unwrap();
+        session.launch("./app").unwrap();
+        session
+            .push_adapter(
+                r#"{"seq":2,"type":"event","event":"stopped","body":{"reason":"breakpoint"}}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            session.read_memory("0x1", 8),
+            Err(DapError::Unsupported("readMemory"))
+        );
+        assert!(!session.capabilities().supports_read_memory);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+{
+  "browser_down": "browser mouse",
+  "browser_up": "browser mouse",
+  "browser_key": "browser keyboard",
+  "browser_scroll": "browser mouse",
+  "phone_down": "phone press 333,257",
+  "phone_up": "phone tap",
+  "phone_swipe": "phone swipe",
+  "phone_key": "phone type",
+  "phone_home": "phone button"
+}

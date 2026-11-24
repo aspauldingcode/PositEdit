@@ -1,0 +1,136 @@
+   Compiling ide-core v0.1.0 (/Users/8amps/PositEdit/crates/ide-core)
+   Compiling ide-ai v0.1.0 (/Users/8amps/PositEdit/crates/ide-ai)
+   Compiling ide-spatial v0.1.0 (/Users/8amps/PositEdit/crates/ide-spatial)
+   Compiling ide-mcp v0.1.0 (/Users/8amps/PositEdit/crates/ide-mcp)
+   Compiling ide-tui v0.1.0 (/Users/8amps/PositEdit/crates/ide-tui)
+warning: unused doc comment
+   --> crates/ide-tui/src/lib.rs:490:13
+    |
+490 |             /// (revision, max display line width in chars) — avoids O(n) on every scroll.
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+491 |             width_cache: RefCell::new(None),
+    |             ------------------------------- rustdoc does not generate documentation for expression fields
+    |
+    = help: use `//` for a plain comment
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `highlight_spans` is never used
+   --> crates/ide-tui/src/lib.rs:534:8
+    |
+471 | impl EditBuffer {
+    | --------------- method in this implementation
+...
+534 |     fn highlight_spans(&self) -> Vec<Span> {
+    |        ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `highlighted` is never used
+    --> crates/ide-tui/src/lib.rs:6085:4
+     |
+6085 | fn highlighted(
+     |    ^^^^^^^^^^^
+
+warning: function `set_confirmed` is never used
+  --> crates/ide-tui/src/clipboard.rs:51:8
+   |
+51 | pub fn set_confirmed(text: &str) -> Result<(), String> {
+   |        ^^^^^^^^^^^^^
+
+warning: method `geom_path` is never used
+   --> crates/ide-tui/src/canvas.rs:201:12
+    |
+ 78 | impl CanvasSurface {
+    | ------------------ method in this implementation
+...
+201 |     pub fn geom_path(&self) -> &Path {
+    |            ^^^^^^^^^
+
+warning: `ide-tui` (lib) generated 5 warnings
+   Compiling ide v0.1.0 (/Users/8amps/PositEdit/crates/ide)
+    Finished `release` profile [optimized] target(s) in 44.61s
+     Running `target/release/posit-edit --bench all`
+posit-edit bench (all)
+  host_pressure=Urgent
+  rss_kib=2128
+  macos=27.2.1
+  samples=9 warmup=2 (BUDGETS.md methodology)
+[memory]
+  undo_after_storm=64 (cap 64)
+  undo_after_critical_trim=8 (cap 8)
+  rss_before_kib=2192 rss_after_kib=3392 delta_kib=1200
+  memory → PASS
+[edit]
+  type_1k_chars_coalesced      median=   2.747ms  p95=   3.018ms  min=   2.126ms  max=   3.018ms  n=9
+    budget_p95<=62.500ms → PASS
+  scatter_512_inserts          median=   1.309ms  p95=   1.976ms  min=   1.155ms  max=   1.976ms  n=9
+    budget_p95<=100.000ms → PASS
+[render]
+  draw_120x40                  median=   3.051ms  p95=   3.493ms  min=   2.896ms  max=   3.493ms  n=9
+    budget_p95<=50.000ms → PASS
+  scroll_1mib_urgent           median=   2.296ms  p95=   2.485ms  min=   1.900ms  max=   2.485ms  n=9
+    budget_p95<=31.250ms → PASS
+[open]
+  open_1mib_plain              median=  23.039ms  p95=  27.251ms  min=  18.885ms  max=  27.251ms  n=9
+    budget_p95<=125.000ms → PASS
+bench verdict=PASS
+   Compiling ide-tui v0.1.0 (/Users/8amps/PositEdit/crates/ide-tui)
+warning: method `highlight_spans` is never used
+   --> crates/ide-tui/src/lib.rs:534:8
+    |
+471 | impl EditBuffer {
+    | --------------- method in this implementation
+...
+534 |     fn highlight_spans(&self) -> Vec<Span> {
+    |        ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `highlighted` is never used
+    --> crates/ide-tui/src/lib.rs:6085:4
+     |
+6085 | fn highlighted(
+     |    ^^^^^^^^^^^
+
+warning: function `set_confirmed` is never used
+  --> crates/ide-tui/src/clipboard.rs:51:8
+   |
+51 | pub fn set_confirmed(text: &str) -> Result<(), String> {
+   |        ^^^^^^^^^^^^^
+
+warning: method `geom_path` is never used
+   --> crates/ide-tui/src/canvas.rs:201:12
+    |
+ 78 | impl CanvasSurface {
+    | ------------------ method in this implementation
+...
+201 |     pub fn geom_path(&self) -> &Path {
+    |            ^^^^^^^^^
+
+warning: enum `WorkClass` is never used
+   --> crates/ide-tui/src/scheduler.rs:192:10
+    |
+192 | pub enum WorkClass {
+    |          ^^^^^^^^^
+
+warning: function `classify` is never used
+   --> crates/ide-tui/src/scheduler.rs:203:8
+    |
+203 | pub fn classify(label: &str) -> WorkClass {
+    |        ^^^^^^^^
+
+warning: `ide-tui` (lib) generated 6 warnings
+   Compiling ide v0.1.0 (/Users/8amps/PositEdit/crates/ide)
+    Finished `release` profile [optimized] target(s) in 49.52s
+     Running `target/release/posit-edit --bench render`
+posit-edit bench (render)
+  host_pressure=Urgent
+  rss_kib=2160
+  macos=27.2.1
+  samples=9 warmup=2 (BUDGETS.md methodology)
+[render]
+  draw_120x40                  median=   1.883ms  p95=   2.027ms  min=   1.842ms  max=   2.027ms  n=9
+    budget_p95<=50.000ms → PASS
+  scroll_1mib_urgent           median=   1.458ms  p95=   1.712ms  min=   1.441ms  max=   1.712ms  n=9
+    budget_p95<=31.250ms → PASS
+bench verdict=PASS

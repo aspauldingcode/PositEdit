@@ -1,0 +1,21 @@
+Runtime pane fix verification (2026-11-20)
+
+Verdict: browser, iOS phone, and Android panes launch without os error 2.
+
+Root cause of os error 2
+  Host spawned terminal-browser / terminal-phone by bare name; ENOENT when not on PATH.
+  Fix: resolve_runtime_program (IDE_TERMINAL_* + ~/.local/bin), enriched_path_for_runtimes,
+  launch via /tmp/posit-launch-ide.sh exporting IDE_TERMINAL_BROWSER/PHONE + Android SDK PATH,
+  browser default URL https://example.com (shim + DLC).
+
+Live Ghostty IDE (pid 29678, window 2102) results
+  6 Browser — example.com via agent-browser; browser-frame lines; notice "browser in the editor"
+  7 Phone   — iPhone 18 Pro Booted; phone-frame lines; notice "phone in the editor"
+  8 Android — android_pane.py on emulator-5554; frame png screencap; notice "android in the editor"
+  i notices — "no notifications" (no os error 2)
+
+Evidence shots: 102–108 under engineering/evidence/computer-use-dogfood-20261121/shots/
+JSON: runtime-fix2.json
+
+Note: Cursor Computer Use / ucu cannot control Ghostty terminal apps; verification used
+screencapture -l + System Events keystrokes to the IDE Ghostty process.

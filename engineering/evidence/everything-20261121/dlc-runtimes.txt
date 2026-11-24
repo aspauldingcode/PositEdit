@@ -1,0 +1,57 @@
+===== runtime browser =====
+{
+  "system": "browser",
+  "action": "open",
+  "cwd": "/Users/8amps/PositEdit",
+  "argv": [
+    "/Users/8amps/PositEdit/engineering/evidence/everything-20261121/shims/terminal-browser",
+    "open",
+    "http://localhost:3000"
+  ],
+  "explanation": "Open http://localhost:3000 in the editor pane",
+  "trust": "executes_project_code",
+  "requires": []
+}
+===== runtime phone-view =====
+{
+  "system": "ios",
+  "action": "view",
+  "cwd": "/Users/8amps/PositEdit",
+  "argv": [
+    "/Users/8amps/PositEdit/engineering/evidence/everything-20261121/shims/terminal-phone",
+    "view",
+    "default"
+  ],
+  "explanation": "Open terminal-phone in the editor pane",
+  "trust": "executes_project_code",
+  "requires": []
+}
+===== runtime phone-boot =====
+{
+  "system": "ios",
+  "action": "boot",
+  "cwd": "/Users/8amps/PositEdit",
+  "argv": [
+    "/Users/8amps/PositEdit/engineering/evidence/everything-20261121/shims/terminal-phone",
+    "up",
+    "default",
+    "--no-view"
+  ],
+  "explanation": "Upstream iOS sim boot requires macOS and Xcode",
+  "trust": "executes_project_code",
+  "requires": []
+}
+===== runtime android-boot =====
+{
+  "system": "android",
+  "action": "boot",
+  "cwd": "/Users/8amps/PositEdit",
+  "argv": [
+    "/usr/bin/python3",
+    "/Users/8amps/PositEdit/extensions/project-dlc/project_dlc/android_pane.py",
+    "Medium_Phone_API_36.1"
+  ],
+  "explanation": "One headless AVD with an in-editor screencap pane",
+  "trust": "executes_project_code",
+  "requires": []
+}

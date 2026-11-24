@@ -1,0 +1,1159 @@
+{
+  "results": {
+    "boot_alive": true,
+    "browser_open": {
+      "ok": false,
+      "snip": "PositEdit on \ue0a0 main [!?] \u276f ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      \nPosit Edit is already running. Only one session is allowed.\nPositEdit on \ue0a0 main [!?]...",
+      "has_canvas": false,
+      "has_interactive": false
+    },
+    "browser_after_click": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276f ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      \nPosit Edit is already running. Only one session is allowed.\nPositEdit on \ue0a0 main [!?]...",
+      "notice_browser": false,
+      "notice_mouse": false
+    },
+    "browser_type": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276f ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      \nPosit Edit is already running. Only one session is allowed.\nPositEdit on \ue0a0 main [!?]...",
+      "has_ab": false
+    },
+    "phone_open": {
+      "ok": false,
+      "snip": "PositEdit on \ue0a0 main [!?] \u276f ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      \nPosit Edit is already running. Only one session is allowed.\nPositEdit on \ue0a0 main [!?]...",
+      "has_canvas": false,
+      "has_phone": false
+    },
+    "phone_after_click": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276f ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      \nPosit Edit is already running. Only one session is allowed.\nPositEdit on \ue0a0 main [!?]...",
+      "has_phone_action": false
+    }
+  },
+  "log": [
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "activate"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "escape"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "escape"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "6"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "click",
+        "x": 1100,
+        "y": 300
+      },
+      "ok": false,
+      "err": "AXApplication \"Ghostty\" offers no AXPress; it has []"
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "mouse",
+        "action": "click",
+        "x": 1100,
+        "y": 300
+      },
+      "ok": false,
+      "err": "unknown operation mouse"
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "tap",
+        "x": 1100,
+        "y": 300
+      },
+      "ok": false,
+      "err": "unknown operation tap"
+    },
+    {
+      "tap_browser": {
+        "code": "error",
+        "elapsed_ms": 109,
+        "error": "unknown operation tap",
+        "ok": false
+      }
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "a"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "b"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "escape"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "7"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "click",
+        "x": 1100,
+        "y": 350
+      },
+      "ok": false,
+      "err": "AXApplication \"Ghostty\" offers no AXPress; it has []"
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "tap",
+        "x": 1100,
+        "y": 350
+      },
+      "ok": false,
+      "err": "unknown operation tap"
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_act",
+      "args": {
+        "target": "Ghostty",
+        "op": "key",
+        "key": "escape"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_screenshot",
+      "args": {
+        "target": "Ghostty"
+      },
+      "ok": true,
+      "err": null
+    },
+    {
+      "tool": "computer_observe",
+      "args": {
+        "target": "Ghostty",
+        "limit": 8
+      },
+      "ok": true,
+      "err": null
+    }
+  ]
+}

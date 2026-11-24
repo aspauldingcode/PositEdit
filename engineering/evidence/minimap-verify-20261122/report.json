@@ -1,0 +1,19 @@
+{
+  "computer_use": "blocked for terminal apps; used screencapture -l + control socket",
+  "findings": {
+    "before": "01-live-before-rebuild.png \u2014 no Kitty minimap (pressure Warning hid strip; f=24 unused)",
+    "after": "08/09/11 \u2014 Kitty PNG minimap with code structure + viewport band visible",
+    "scrollbar": "eighth-cell FineThumb + high-contrast end caps"
+  },
+  "shots": {
+    "01-live-before-rebuild.png": "3099ae47be35417d",
+    "02-after-relaunch-4718.png": "cb5563378ac87e07",
+    "02-after-relaunch-6026.png": "86a5db32afe64f86",
+    "03-minimap-after-fix.png": "d046736c3b1a32d3",
+    "08-minimap-live.png": "31bd05a8363999ab",
+    "09-minimap-and-scroll.png": "c91a3945811feca3",
+    "10-right-edge-crop.png": "62838315a1fff6b6",
+    "11-final-minimap.png": "893abff7908ad318",
+    "12-final-right-crop.png": "ecc6dc728b2267e1"
+  }
+}

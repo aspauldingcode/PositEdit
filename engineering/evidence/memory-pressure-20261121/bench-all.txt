@@ -1,0 +1,33 @@
+warning: method `geom_path` is never used
+   --> crates/ide-tui/src/canvas.rs:176:12
+    |
+ 65 | impl CanvasSurface {
+    | ------------------ method in this implementation
+...
+176 |     pub fn geom_path(&self) -> &Path {
+    |            ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+posit-edit bench (all)
+  host_pressure=Urgent
+  rss_kib=2384
+  macos=27.2.1
+  samples=9 warmup=2 (BUDGETS.md methodology)
+[memory]
+  undo_after_storm=64 (cap 64)
+  undo_after_critical_trim=8 (cap 8)
+  rss_before_kib=2688 rss_after_kib=5280 delta_kib=2592
+  memory → PASS
+[edit]
+  type_1k_chars_coalesced      median=  57.174ms  p95=  59.982ms  min=  46.951ms  max=  59.982ms  n=9
+    budget_p95<=50.000ms → FAIL
+  scatter_512_inserts          median=  17.038ms  p95=  19.448ms  min=  15.300ms  max=  19.448ms  n=9
+    budget_p95<=80.000ms → PASS
+[render]
+  draw_120x40                  median=  25.592ms  p95=  26.957ms  min=  22.347ms  max=  26.957ms  n=9
+    budget_p95<=40.000ms → PASS
+[open]
+  open_1mib_ish                median= 214.653ms  p95= 240.888ms  min= 189.654ms  max= 240.888ms  n=9
+    budget_p95<=100.000ms → FAIL
+bench verdict=FAIL

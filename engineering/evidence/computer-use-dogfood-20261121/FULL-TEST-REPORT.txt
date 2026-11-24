@@ -1,0 +1,34 @@
+Posit Edit Computer Use full test (Ghostty + ucu)
+================================================
+Date: 2026-11-20
+Driver: ucu CLI (computer_observe / computer_screenshot / computer_act key|drag|clipboard_write)
+Host: Ghostty pid 17373, Posit Edit ./target/debug/ide /tmp/posit-debug-demo/src/main.rs
+Cursor MCP: nix Cursor 3.27.22 still hard-blocks Ghostty app targets
+  ("Computer Use doesn\'t control terminal apps")
+  Unblock requires relaunch of ~/Applications/Cursor-GhosttyCU.app
+
+Results
+-------
+PASS  Ghostty screenshot + observe (AX Terminal content area)
+PASS  Activate Ghostty / key delivery (CGEvent→pid)
+PASS  Pointer taps via zero-length drag (HID) into TUI
+PASS  Edit mode + paste comment // cu-dogfood (file rev advanced)
+PASS  Android runtime: status "android-boot", emulator-5554 Medium_Phone_API_36.1 frame png
+PASS  Debug: lldb target create + "debugging with lldb" status; sessions zsh/python3/lldb
+PASS  Terminal toggle (collapsed to "t terminal" label)
+PASS  Spatial chord side-effect: Yazi floating FM appeared on zo path
+PASS  Notifications surface Runtime os error 2 when a runtime path is missing
+FAIL  cursor-computer-use app-target screenshot of Ghostty (still blocked on nix Cursor)
+PARTIAL  Help overlay: top-right ? click missed; shift+/ typed into terminal when focus was shell
+PARTIAL  Phone toolbar tap likely landed on Debug region (lldb visible) — coordinate calibration
+PARTIAL  Ghostty paste-protection modal interrupted // cu-full clipboard paste (needs Paste click)
+PARTIAL  Terminal top-edge resize drag: terminal collapsed; exact divider hit uncertain
+
+Evidence
+--------
+engineering/evidence/computer-use-dogfood-20261121/shots/
+  00-baseline, 12-relaunched, 60–70 series (help/browser/phone/android/debug/spatial/edit/term)
+  ghostty-ide-running.jpg
+ucu-dogfood-log.json / ucu-dogfood-log2.json / ucu-dogfood-clicks.json
+terminal-unblock.txt
+scripts/unblock-cursor-computer-use-terminals.sh

@@ -1,0 +1,3 @@
+PositEdit on  main [!?] ❯ ./target/debug/ide ~/moonshot/moonshotTests/moonshotTests.swift                      
+Posit Edit is already running. Only one session is allowed.
+PositEdit on  main [!?]...

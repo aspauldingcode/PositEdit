@@ -1,0 +1,15 @@
+Posit Edit MCP control plane
+============================
+Binary: target/debug/posit-edit-mcp
+IDE control socket: ~/.cache/posit-edit/control.path → TMPDIR/posit-edit-<uid>/control.sock
+Config: python3 scripts/configure_mcp.py → .cursor/mcp.json (posit-edit server)
+
+Verified tools (live Ghostty IDE session):
+- posit_ping → pid + socket
+- posit_status → workspace, focus, notice, runtime_dock
+- posit_snapshot → text UI grid (shows Terminal "log  t", Browser toolbar)
+- posit_runtime browser → notice "browser panel open", runtime_dock=browser, focus=Runtime
+- posit_runtime phone → runtime_dock=phone
+- posit_capture → text snapshot under workspace evidence path
+
+Agents should use these tools instead of Computer Use against Ghostty.

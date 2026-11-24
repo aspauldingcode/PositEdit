@@ -235,6 +235,14 @@ name = "ide-git"
 version = "0.1.0"
 
 [[package]]
+name = "ide-local-tab-ui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+]
+
+[[package]]
 name = "ide-lsp"
 version = "0.1.0"
 dependencies = [
@@ -247,6 +255,9 @@ name = "ide-mcp"
 version = "0.1.0"
 dependencies = [
  "ide-ai",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -274,15 +285,28 @@ name = "ide-remote"
 version = "0.1.0"
 
 [[package]]
+name = "ide-spatial"
+version = "0.1.0"
+dependencies = [
+ "ide-core",
+ "ide-syntax",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ide-syntax"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-kotlin-ng",
+ "tree-sitter-language",
  "tree-sitter-nix",
+ "tree-sitter-objc",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-swift",
@@ -302,10 +326,16 @@ dependencies = [
  "ide-ai",
  "ide-core",
  "ide-dlc-ui",
+ "ide-local-tab-ui",
+ "ide-lsp",
+ "ide-mcp",
  "ide-navigation",
+ "ide-packages",
+ "ide-spatial",
  "ide-syntax",
  "libc",
  "ratatui",
+ "serde",
  "serde_json",
 ]
 
@@ -367,6 +397,16 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -570,6 +610,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -783,6 +824,16 @@ name = "tree-sitter-nix"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4952a9733f3a98f6683a0ccd1035d84ab7a52f7e84eeed58548d86765ad92de3"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-objc"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ca8bb556423fc176f0535e79d525f783a6684d3c9da81bf9d905303c129e1d2"
 dependencies = [
  "cc",
  "tree-sitter-language",

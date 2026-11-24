@@ -1,0 +1,11 @@
+=== PHONE LIVE ===
+terminal-phone shim
+action=view session=default
+sim udid=9B662FC3-4B78-4561-8200-8CC75EC91718
+    iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 0     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 1     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 2     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 3     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 4     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+phone-frame 5     iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 

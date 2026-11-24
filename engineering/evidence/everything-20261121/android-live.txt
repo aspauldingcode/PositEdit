@@ -1,0 +1,19 @@
+Android AVD pane (headless). Ctrl-C closes this view.
+serial=emulator-5554 avd=Medium_Phone_API_36.1
+[H[JAndroid  Medium_Phone_API_36.1  emulator-5554
+frame png 1080x2400 1375284B
+[########################################]
+----------------------------------------
+--------- beginning of main
+I/ajbb    ( 1329): Listening for setting changes changes
+I/dkta    ( 1329): (REDACTED) isAppDefaultAssistant setting: %s
+I/dkta    ( 1329): (REDACTED) isAppDefaultAssistant defaultComponentName: %s
+--------- beginning of system
+W/Looper  (  903): Drained
+D/WM-SystemJobScheduler( 2611): Scheduling work ID 08ddda1a-4590-40c9-a9c5-b944ab4728c6Job ID 15
+I/aqpt    ( 1329): (REDACTED) DelegationStatus: %s
+I/anxh    ( 1885): Robin eligibility : Account is Pseudonymous type.
+W/.gms.persistent( 3238): Suspending all threads took: 1.084s
+[H[JAndroid  Medium_Phone_API_36.1  emulator-5554
+frame png 1080x2400 1375284B
+ANDROID_PANE_OK frames 2

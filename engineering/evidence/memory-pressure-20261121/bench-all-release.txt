@@ -1,0 +1,45 @@
+warning: function `highlighted` is never used
+    --> crates/ide-tui/src/lib.rs:6024:4
+     |
+6024 | fn highlighted(
+     |    ^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `set_confirmed` is never used
+  --> crates/ide-tui/src/clipboard.rs:51:8
+   |
+51 | pub fn set_confirmed(text: &str) -> Result<(), String> {
+   |        ^^^^^^^^^^^^^
+
+warning: method `geom_path` is never used
+   --> crates/ide-tui/src/canvas.rs:176:12
+    |
+ 65 | impl CanvasSurface {
+    | ------------------ method in this implementation
+...
+176 |     pub fn geom_path(&self) -> &Path {
+    |            ^^^^^^^^^
+
+posit-edit bench (all)
+  host_pressure=Urgent
+  rss_kib=2032
+  macos=27.2.1
+  samples=9 warmup=2 (BUDGETS.md methodology)
+[memory]
+  undo_after_storm=64 (cap 64)
+  undo_after_critical_trim=8 (cap 8)
+  rss_before_kib=2144 rss_after_kib=3392 delta_kib=1248
+  memory → PASS
+[edit]
+  type_1k_chars_coalesced      median=   1.357ms  p95=   1.642ms  min=   1.303ms  max=   1.642ms  n=9
+    budget_p95<=62.500ms → PASS
+  scatter_512_inserts          median=   0.650ms  p95=   0.657ms  min=   0.648ms  max=   0.657ms  n=9
+    budget_p95<=100.000ms → PASS
+[render]
+  draw_120x40                  median=   1.697ms  p95=   1.810ms  min=   1.681ms  max=   1.810ms  n=9
+    budget_p95<=50.000ms → PASS
+[open]
+  open_1mib_plain              median=  25.585ms  p95=  35.925ms  min=  21.092ms  max=  35.925ms  n=9
+    budget_p95<=125.000ms → PASS
+bench verdict=PASS

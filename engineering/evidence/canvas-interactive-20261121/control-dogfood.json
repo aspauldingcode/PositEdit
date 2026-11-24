@@ -1,0 +1,14 @@
+{
+  "browser_dock": "browser",
+  "browser_notice": "browser keyboard",
+  "browser_focus": "Runtime",
+  "browser_click_notice": "browser keyboard",
+  "browser_click_focus": "Runtime",
+  "browser_key_notice": "browser keyboard",
+  "browser_key_focus": "Runtime",
+  "phone_dock": "phone",
+  "phone_notice": "phone type",
+  "phone_click_notice": "phone type",
+  "phone_click_focus": "Runtime",
+  "phone_key_notice": "phone type"
+}

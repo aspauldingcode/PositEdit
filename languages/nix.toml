@@ -1,4 +1,6 @@
 # Suggested adapters. Resolve executables in workspace environment; no implicit install.
+# String embeds: put /* bash */, /* py */, /* javascript */, /* toml */, … immediately
+# before ''…'' or "…" to syntax-highlight the guest language inside.
 id = "nix"
 extensions = ["nix"]
 server = "nixd"

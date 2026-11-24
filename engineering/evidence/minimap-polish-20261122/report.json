@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-22",
+  "changes": [
+    "Kitty minimap paint inside synchronized update (tear reduction)",
+    "Direct Kitty PNG placement (no U=1 placeholders) for minimap strip",
+    "edge_chrome: hide both when content fits; Kitty replaces text scrollbar",
+    "Urgent/Critical: text scrollbar only (FORCE env keeps Kitty for dogfood)",
+    "Light theme prefers Ghostty cream; PX_PER_LINE=8 PX_PER_CHAR=4; wider cols",
+    "MinimapFrameCache: base RGB reuse + in-place viewport tint",
+    "bend/minimap laws updated to 8px/line"
+  ],
+  "tests": {
+    "ide-tui lib": "see ide-final.txt",
+    "bend minimap": "ALL PROOFS CHECK via scripts/check_bend.sh"
+  },
+  "shots": {
+    "09-b.png": "light theme editor + Kitty strip under Warning/Urgent",
+    "11-w6710.png / 12-editor.png": "forced minimap under Urgent with viewport band",
+    "12-editor-right.png": "right-edge crop"
+  },
+  "notes": "Host often at memorystatus Warning/Urgent; POSIT_EDIT_MINIMAP_FORCE=1 for screenshots"
+}

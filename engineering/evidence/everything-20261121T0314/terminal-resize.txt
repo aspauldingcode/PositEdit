@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/ide_tui-6176e557fbf2967e)
+
+running 4 tests
+test layout::tests::open_terminal_is_the_bottom_quarter ... ok
+test tests::terminal_body_drag_selects_instead_of_resizing ... ok
+test tests::terminal_panel_is_quarter_the_screen_and_multiplexes ... ok
+test terminal::tests::browser_phone_android_live_inside_terminal_buffer ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.26s
+

@@ -1,0 +1,15 @@
+=== BROWSER LIVE ===
+terminal-browser shim
+action=open
+url=http://example.com
+fetching via agent-browser read…
+This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.
+[browser pane live] press Ctrl-C to close
+browser-frame 0 18:37:36
+browser-frame 1 18:37:37
+browser-frame 2 18:37:37
+browser-frame 3 18:37:38
+browser-frame 4 18:37:38
+browser-frame 5 18:37:39
+browser-frame 6 18:37:40
+browser-frame 7 18:37:40

@@ -1,0 +1,37 @@
+   Compiling ide-spatial v0.1.0 (/Users/8amps/PositEdit/crates/ide-spatial)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running unittests src/lib.rs (target/debug/deps/ide_spatial-63b28ec9ddc383c7)
+
+running 16 tests
+test preview::tests::text_fallback_without_protocols ... ok
+test minimap::tests::hides_when_narrow_and_caches_revision ... ok
+test overview::tests::zero_one_hundred_panes ... ok
+test probes::tests::marks_stale_and_gates_memory ... ok
+test lenses::tests::nest_is_bounded ... ok
+test impact::tests::debounce_and_no_autorun ... ok
+test causal::tests::refuses_temporal_only_and_keeps_breadcrumbs ... ok
+test relations::tests::attach_is_idempotent_per_target ... ok
+test structural::tests::ambiguous_move_is_rejected ... ok
+test tests::contract_version_is_one ... ok
+test structural::tests::unicode_duplicate_is_lossless ... ok
+test tests::overview_jump_and_escape_restore ... ok
+test tests::lens_stack_bounds_and_syscall_gate ... ok
+test timeline::tests::orders_redacts_and_labels_honestly ... ok
+test output::tests::strips_ansi_and_rejects_escape_paths ... ok
+test snapshot::tests::round_trip_and_opt_out ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (target/debug/deps/differential-2a8085a7d8cc4c07)
+
+running 1 test
+test bend_policy_fixtures_match_rust ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_spatial
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

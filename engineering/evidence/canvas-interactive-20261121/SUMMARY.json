@@ -1,0 +1,26 @@
+{
+  "stub_unit_test": "phone_and_browser_dispatch_through_stubs PASS",
+  "live_control": {
+    "browser_down": "browser mouse",
+    "browser_up": "browser mouse",
+    "browser_key": "browser keyboard",
+    "browser_scroll": "browser mouse",
+    "phone_down": "phone press 333,257",
+    "phone_up": "phone tap",
+    "phone_swipe": "phone swipe",
+    "phone_key": "phone type",
+    "phone_home": "phone button"
+  },
+  "shots": [
+    "90-browser-interactive.png",
+    "91-phone-interactive.png"
+  ],
+  "evidence_dir": "/Users/8amps/PositEdit/engineering/evidence/canvas-interactive-20261121",
+  "verdict": "PASS",
+  "notes": [
+    "Browser: mouse down/up, keyboard, wheel via control pointer/key",
+    "Phone: tap, swipe, type, HOME button via control pointer/key",
+    "Device I/O is off-thread so the TUI/control socket stay responsive",
+    "Kitty Canvas panes visible in screenshots (far-right)"
+  ]
+}

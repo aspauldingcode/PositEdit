@@ -1,0 +1,14 @@
+terminal-browser shim
+action=open
+url=http://example.com
+fetching via agent-browser read…
+This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.
+[browser pane live] press Ctrl-C to close
+browser-frame 0 19:15:02
+browser-frame 1 19:15:02
+browser-frame 2 19:15:03
+browser-frame 3 19:15:03
+browser-frame 4 19:15:04
+browser-frame 5 19:15:04
+browser-frame 6 19:15:05
+browser-frame 7 19:15:05

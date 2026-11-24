@@ -1,0 +1,29 @@
+Posit Edit runtime dock live verification
+========================================
+Date: 2026-11-20
+Method: Computer Use screen screenshots (MCP refuses Ghostty app targets)
+        + screencapture PNG + System Events AXRaise by window title
+        /tmp/posit-launch-ide.sh → target/debug/ide
+
+Findings
+--------
+1. IDE launches with toolbar Browser | Phone | Android.
+2. Terminal title-row shows yellow "log" and "t" (toggle) top-right.
+3. Key 6 opens Browser dock:
+   - status: "browser panel open"
+   - pane title: Browser
+   - child: browser_pane.py https://example.com
+   - mux list: 2 browser
+   Evidence: shots/04-browser-dock.png, shots/05-browser-settled.png
+4. Key 7 opens Phone dock:
+   - status: "phone panel open"
+   - pane title: Phone / terminal-phone - posit
+   - child: terminal-phone view posit --protocol blocks
+   - idb_companion + phone-viewer-worker running
+   - mux list: 3 phone; UI shows Home/Lock/Live/Zoom
+   Evidence: shots/07-phone-dock-settled.png
+5. Computer Use note: computer_screenshot with Ghostty app target is blocked
+   ("doesn't control terminal apps"). Screen-scope screenshots worked and are
+   under shots/computer-use/*.webp.
+
+PASS: browser dock + phone dock both launched and screenshot-verified.

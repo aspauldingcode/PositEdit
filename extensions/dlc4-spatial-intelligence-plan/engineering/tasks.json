@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "milestones": [
+    {
+      "id": "M0-contracts",
+      "status": "planned"
+    },
+    {
+      "id": "M0-capability-map",
+      "status": "planned"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "F01",
+      "title": "spatial-overview",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F02",
+      "title": "micro-minimap",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F03",
+      "title": "inline-probes",
+      "depends_on": [
+        "M0-contracts",
+        "M0-capability-map"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F04",
+      "title": "structural-edit",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F05",
+      "title": "execution-timeline",
+      "depends_on": [
+        "M0-contracts",
+        "M0-capability-map"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F06",
+      "title": "structured-output",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F07",
+      "title": "ephemeral-lenses",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F08",
+      "title": "rich-preview",
+      "depends_on": [
+        "M0-contracts",
+        "M0-capability-map"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F09",
+      "title": "causal-navigation",
+      "depends_on": [
+        "M0-contracts",
+        "M0-capability-map"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F10",
+      "title": "workspace-snapshots",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F11",
+      "title": "change-impact",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    },
+    {
+      "id": "F12",
+      "title": "pane-relationships",
+      "depends_on": [
+        "M0-contracts"
+      ],
+      "status": "planned",
+      "acceptance": [
+        "host integrated",
+        "no DLC1-3 regression",
+        "unit and integration tests",
+        "resource budget measured",
+        "limitations reported"
+      ]
+    }
+  ]
+}

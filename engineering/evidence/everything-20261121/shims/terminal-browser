@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# DEPRECATED evidence shim — real binary is vendor/bin/terminal-browser
+set -euo pipefail
+exec /Users/8amps/PositEdit/vendor/bin/terminal-browser "$@"

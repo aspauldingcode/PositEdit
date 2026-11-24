@@ -1,0 +1,56 @@
+{
+  "runtimes": [
+    {
+      "id": "terminal-browser",
+      "available": true,
+      "reason": "Executable present",
+      "transport": "in-editor pane",
+      "native_gpu": "Chromium GPU when supported"
+    },
+    {
+      "id": "terminal-phone",
+      "available": true,
+      "reason": "Requires terminal-phone and Apple Silicon macOS with Xcode",
+      "transport": "in-editor pane",
+      "native_gpu": "Simulator rendering / device capture"
+    },
+    {
+      "id": "android-emulator",
+      "available": true,
+      "reason": "Android emulator found",
+      "transport": "headless AVD + in-editor pane",
+      "native_gpu": "HVF on macOS, KVM on Linux if supported"
+    },
+    {
+      "id": "android-adb",
+      "available": true,
+      "reason": "Install Android platform-tools",
+      "transport": "ADB",
+      "native_gpu": "Physical device GPU"
+    },
+    {
+      "id": "xtool",
+      "available": false,
+      "reason": "Install and configure xtool with authorized toolchain",
+      "transport": "Native CLI",
+      "native_gpu": "Physical Apple device GPU"
+    }
+  ],
+  "build_tools": {
+    "gradle": false,
+    "mvn": false,
+    "cmake": false,
+    "meson": false,
+    "cargo": true,
+    "nix": true,
+    "swift": true,
+    "zig": false,
+    "bazel": false,
+    "java": true,
+    "emulator": true,
+    "adb": true,
+    "xcodebuild": true,
+    "xtool": false
+  },
+  "notice": "Tool discovery is not a proven build, device, license, or GPU acceleration check"
+}

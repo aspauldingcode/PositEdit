@@ -52,6 +52,9 @@ pub struct Chrome {
     pub tree: Rect,
     pub content: Rect,
     pub agent: Rect,
+    /// Dedicated Canvas for Browser / Phone / Android pixel previews.
+    /// Sits to the right of the whole workbench (editor, chat, terminal).
+    pub canvas: Rect,
     pub terminal: Rect,
     pub status: Option<Rect>,
 }
@@ -62,6 +65,13 @@ pub struct TerminalPane {
     pub rows: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CanvasPane {
+    pub open: bool,
+    pub width: Option<u16>,
+}
+
+#[allow(dead_code)]
 pub fn chrome(
     area: Rect,
     palette: bool,
@@ -70,6 +80,31 @@ pub fn chrome(
     tree_pref: u16,
     agent_pref: u16,
     terminal: TerminalPane,
+) -> Chrome {
+    chrome_with_canvas(
+        area,
+        palette,
+        sidebar,
+        chat,
+        tree_pref,
+        agent_pref,
+        terminal,
+        CanvasPane::default(),
+    )
+}
+
+/// Layout: title / status span the full width. The Canvas is a dedicated right
+/// column for device/web pixel previews. The workbench (files, editor, agent,
+/// terminal) fills the left column so the terminal never sits under the Canvas.
+pub fn chrome_with_canvas(
+    area: Rect,
+    palette: bool,
+    sidebar: bool,
+    chat: bool,
+    tree_pref: u16,
+    agent_pref: u16,
+    terminal: TerminalPane,
+    canvas: CanvasPane,
 ) -> Chrome {
     let rows = if palette {
         [
@@ -89,23 +124,45 @@ pub fn chrome(
         .constraints(rows)
         .split(area);
     let split = chunks[1];
-    let toolbar_height = split.height.min(2);
-    let toolbar = Rect {
+
+    let canvas_width = if !canvas.open || split.width < 64 {
+        0
+    } else {
+        let max = split.width.saturating_sub(40);
+        let default = (split.width / 3).clamp(32, 64).min(max.max(32));
+        canvas.width.unwrap_or(default).clamp(28, max.max(28))
+    };
+    let work_width = split.width.saturating_sub(canvas_width);
+    let work = Rect {
         x: split.x,
         y: split.y,
-        width: split.width,
+        width: work_width,
+        height: split.height,
+    };
+    let canvas_rect = Rect {
+        x: split.x.saturating_add(work_width),
+        y: split.y,
+        width: canvas_width,
+        height: split.height,
+    };
+
+    let toolbar_height = work.height.min(2);
+    let toolbar = Rect {
+        x: work.x,
+        y: work.y,
+        width: work.width,
         height: toolbar_height,
     };
     let body = Rect {
-        x: split.x,
-        y: split.y.saturating_add(toolbar_height),
-        width: split.width,
-        height: split.height.saturating_sub(toolbar_height),
+        x: work.x,
+        y: work.y.saturating_add(toolbar_height),
+        width: work.width,
+        height: work.height.saturating_sub(toolbar_height),
     };
     let tree_width = if !sidebar {
         3
     } else if tree_pref == TREE_WIDTH {
-        if area.width >= TREE_WIDTH + 16 {
+        if work.width >= TREE_WIDTH + 16 {
             TREE_WIDTH
         } else {
             3
@@ -172,12 +229,29 @@ pub fn chrome(
         tree,
         content,
         agent,
+        canvas: canvas_rect,
         terminal,
         status: (!palette).then_some(chunks[2]),
     }
 }
 
-/// The open terminal stays on the bottom. The default is half the screen.
+/// Back-compat alias used by older call sites.
+pub fn chrome_with_runtime(
+    area: Rect,
+    palette: bool,
+    sidebar: bool,
+    chat: bool,
+    tree_pref: u16,
+    agent_pref: u16,
+    terminal: TerminalPane,
+    runtime: CanvasPane,
+) -> Chrome {
+    chrome_with_canvas(
+        area, palette, sidebar, chat, tree_pref, agent_pref, terminal, runtime,
+    )
+}
+
+/// The open terminal stays on the bottom. The default is a quarter of the screen.
 /// A drag stores a preferred height and still leaves the editor a few rows.
 fn terminal_height(screen: u16, body: u16, open: bool, preferred: Option<u16>) -> u16 {
     if body < 8 {
@@ -187,7 +261,7 @@ fn terminal_height(screen: u16, body: u16, open: bool, preferred: Option<u16>) -
         return 1;
     }
     let cap = body.saturating_sub(4).max(1);
-    let default = (screen / 2).min(cap).max(1);
+    let default = (screen / 4).min(cap).max(3);
     preferred.unwrap_or(default).clamp(1, cap)
 }
 
@@ -271,7 +345,9 @@ pub fn window_spans(
         Axis::Vertical => tile_height,
     };
     let mut spans = [along; MAX_TILES];
-    if show_many && buffers <= MAX_TILES {
+    // One buffer always fills the view. Leftover drag sizes from a prior split
+    // must not leave a half-width pane beside empty space.
+    if show_many && (2..=MAX_TILES).contains(&buffers) {
         if let Some(custom) = custom {
             if custom.len() == buffers && custom.iter().all(|span| *span >= 1) {
                 for (slot, span) in spans.iter_mut().zip(custom) {
@@ -471,6 +547,10 @@ mod tests {
         let full = window_spans(content, Axis::Horizontal, false, 2, Some(&[100, 60]));
         assert_eq!(full.tile_width, 160);
         assert_eq!(full.along(0), 160);
+        // A lone buffer ignores leftover drag spans and fills the content.
+        let alone = window_spans(content, Axis::Horizontal, true, 1, Some(&[100]));
+        assert_eq!(alone.tile_width, 160);
+        assert_eq!(alone.along(0), 160);
 
         let stacked = Rect::new(0, 0, 40, 80);
         let rows = window_spans(stacked, Axis::Vertical, true, 2, Some(&[50, 30]));
@@ -481,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn open_terminal_is_the_bottom_half() {
+    fn open_terminal_is_the_bottom_quarter() {
         let area = Rect::new(0, 0, 80, 24);
         let open = chrome(
             area,
@@ -495,7 +575,7 @@ mod tests {
                 rows: None,
             },
         );
-        assert_eq!(open.terminal.height, 12);
+        assert_eq!(open.terminal.height, 6);
         assert_eq!(open.terminal.y + open.terminal.height + 1, area.height);
         assert!(open.editor.y < open.terminal.y);
         assert_eq!(open.editor.height + open.terminal.height, open.body.height);

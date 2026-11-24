@@ -1,0 +1,37 @@
+test_dry_run_no_changes (test_installer.InstallTests) ... ok
+test_existing_file_refuses_without_changes (test_installer.InstallTests) ... ok
+test_install_additive (test_installer.InstallTests) ... ok
+test_missing_host (test_installer.InstallTests) ... ok
+test_repeat_refuses (test_installer.InstallTests) ... ok
+test_symlink_refuses (test_installer.InstallTests) ... ok
+test_dead_local_falls_back (test_local_tab.BackendTests) ... ok
+test_loopback_accepted (test_local_tab.BackendTests) ... ok
+test_remote_rejected (test_local_tab.BackendTests) ... ok
+test_cache (test_local_tab.EngineTests) ... ok
+test_cache_bounds (test_local_tab.EngineTests) ... ok
+test_completion_response (test_local_tab.EngineTests) ... ok
+test_control_char_filter (test_local_tab.EngineTests) ... ok
+test_default_enabled (test_local_tab.EngineTests) ... ok
+test_disabled (test_local_tab.EngineTests) ... ok
+test_fence_rejected (test_local_tab.EngineTests) ... ok
+test_lexical (test_local_tab.EngineTests) ... ok
+test_stale (test_local_tab.EngineTests) ... ok
+test_suffix_duplication_rejected (test_local_tab.EngineTests) ... ok
+test_unknown_empty (test_local_tab.EngineTests) ... ok
+test_boolean_revision_rejected (test_local_tab.ProtocolTests) ... ok
+test_context_count (test_local_tab.ProtocolTests) ... ok
+test_negative_revision (test_local_tab.ProtocolTests) ... ok
+test_parsing (test_local_tab.ProtocolTests) ... ok
+test_token_bound (test_local_tab.ProtocolTests) ... ok
+test_too_large (test_local_tab.ProtocolTests) ... ok
+test_unknown_language (test_local_tab.ProtocolTests) ... ok
+test_health (test_local_tab.WorkerTests) ... ok
+test_malformed (test_local_tab.WorkerTests) ... ok
+test_toggle (test_local_tab.WorkerTests) ... ok
+test_worker_cancel (test_local_tab.WorkerTests) ... ok
+test_worker_completion (test_local_tab.WorkerTests) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 0.595s
+
+OK

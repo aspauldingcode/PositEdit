@@ -1,0 +1,6 @@
+caps [('terminal-browser', True), ('terminal-phone', True), ('android-emulator', True), ('android-adb', True), ('xtool', False)]
+browser ['/Users/8amps/PositEdit/engineering/evidence/everything-20261121/shims/terminal-browser', 'open', 'http://localhost:3000']
+phone-view ['/Users/8amps/PositEdit/engineering/evidence/everything-20261121/shims/terminal-phone', 'view', 'default']
+android-boot ['/usr/bin/python3', '/Users/8amps/PositEdit/extensions/project-dlc/project_dlc/android_pane.py', 'Medium_Phone_API_36.1']
+projects 2 ['nix', 'cargo']
+DLC1_LIVE_OK

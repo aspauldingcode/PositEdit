@@ -1,0 +1,156 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (target/debug/deps/ide_core-54b12f2d1497940f)
+
+running 13 tests
+test tests::atomic_edit_and_undo ... ok
+test tests::multi_cursor_is_one_revision_and_undo ... ok
+test tests::multi_edit_reverse_order_is_stable ... ok
+test position::tests::rejects_mid_scalar_and_mid_grapheme ... ok
+test position::tests::maps_scalar_byte_utf16_and_grapheme ... ok
+test tests::overlapping_cursors_leave_text_unchanged ... ok
+test tests::overlapping_edits_rejected_atomically ... ok
+test tests::same_caret_inserts_do_not_apply ... ok
+test tests::unit_edit_rejects_a_split_scalar_and_deletes_whole_graphemes ... ok
+test tests::stale_revision_leaves_document_unchanged ... ok
+test persist::tests::symlink_save_does_not_replace_the_link ... ok
+test persist::tests::recovery_restores_revision_and_rejects_truncation ... ok
+test persist::tests::crlf_round_trip_keeps_permissions_and_newlines ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_dap-3f12d6950cd355a3)
+
+running 3 tests
+test tests::malformed_adapter_message_does_not_move_state ... ok
+test tests::read_memory_requires_advertised_capability ... ok
+test tests::launch_waits_for_configuration_when_advertised ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_dlc_ui-b852ee7a082c4070)
+
+running 2 tests
+test tests::shortcuts_cover_every_toolbar_button ... ok
+test tests::untrusted_work_stays_a_preview ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_local_tab_ui-c93c93a2a3ec2bdd)
+
+running 3 tests
+test tests::keyboard ... ok
+test tests::toggle ... ok
+test tests::enabled_by_default ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_process-11e349b599dfaa08)
+
+running 4 tests
+test tests::cancel_stops_the_child ... ok
+test tests::output_is_capped ... ok
+test tests::captures_stdout_without_a_shell ... ok
+test tests::timeout_is_not_success ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_spatial-2093750a407eb790)
+
+running 16 tests
+test preview::tests::text_fallback_without_protocols ... ok
+test lenses::tests::nest_is_bounded ... ok
+test minimap::tests::hides_when_narrow_and_caches_revision ... ok
+test probes::tests::marks_stale_and_gates_memory ... ok
+test impact::tests::debounce_and_no_autorun ... ok
+test causal::tests::refuses_temporal_only_and_keeps_breadcrumbs ... ok
+test overview::tests::zero_one_hundred_panes ... ok
+test relations::tests::attach_is_idempotent_per_target ... ok
+test structural::tests::ambiguous_move_is_rejected ... ok
+test structural::tests::unicode_duplicate_is_lossless ... ok
+test tests::contract_version_is_one ... ok
+test tests::lens_stack_bounds_and_syscall_gate ... ok
+test tests::overview_jump_and_escape_restore ... ok
+test timeline::tests::orders_redacts_and_labels_honestly ... ok
+test output::tests::strips_ansi_and_rejects_escape_paths ... ok
+test snapshot::tests::round_trip_and_opt_out ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (target/debug/deps/differential-b09d2cacf4e1c742)
+
+running 1 test
+test bend_policy_fixtures_match_rust ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_syntax-daef7554ce818da8)
+
+running 10 tests
+test tests::huge_buffers_stay_plain ... ok
+test tests::plain_text_is_not_labeled_as_code ... ok
+test tests::extension_beats_shebang_and_unknown_stays_plain ... ok
+test tests::loads_shipped_profiles ... ok
+test tests::markdown_shell_toml_json_and_bend_are_colored ... ok
+test tests::formatters_match_shipped_profiles_and_do_not_run_themselves ... ok
+test tests::broken_source_does_not_panic ... ok
+test tests::tree_sitter_keeps_keywords_inside_strings ... ok
+test tests::every_shipped_language_parses_a_keyword ... ok
+test tests::manual_formatter_rewrites_only_a_copy ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_test-7e47a8d568f88840)
+
+running 1 test
+test tests::parses_pass_fail_and_groups_modules ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_dap
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_dlc_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_local_tab_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_process
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_spatial
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_syntax
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ide_test
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

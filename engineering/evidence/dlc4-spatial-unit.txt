@@ -1,0 +1,68 @@
+   Compiling serde_core v1.0.229
+   Compiling proc-macro2 v1.0.107
+   Compiling serde_json v1.0.154
+   Compiling quote v1.0.47
+   Compiling tree-sitter-nix v0.3.0
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tree-sitter-zig v1.1.2
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-java v0.23.5
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-kotlin-ng v1.1.0
+   Compiling tree-sitter-c v0.24.2
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-swift v0.7.4
+   Compiling tree-sitter v0.25.10
+   Compiling syn v3.0.10
+   Compiling serde v1.0.229
+   Compiling serde_derive v1.0.229
+   Compiling ide-dap v0.1.0 (/Users/8amps/PositEdit/crates/ide-dap)
+   Compiling ide-syntax v0.1.0 (/Users/8amps/PositEdit/crates/ide-syntax)
+   Compiling ide-spatial v0.1.0 (/Users/8amps/PositEdit/crates/ide-spatial)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running unittests src/lib.rs (target/debug/deps/ide_dap-3f12d6950cd355a3)
+
+running 3 tests
+test tests::malformed_adapter_message_does_not_move_state ... ok
+test tests::read_memory_requires_advertised_capability ... ok
+test tests::launch_waits_for_configuration_when_advertised ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ide_spatial-63b28ec9ddc383c7)
+
+running 16 tests
+test minimap::tests::hides_when_narrow_and_caches_revision ... ok
+test preview::tests::text_fallback_without_protocols ... ok
+test probes::tests::marks_stale_and_gates_memory ... ok
+test lenses::tests::nest_is_bounded ... ok
+test causal::tests::refuses_temporal_only_and_keeps_breadcrumbs ... ok
+test overview::tests::zero_one_hundred_panes ... ok
+test impact::tests::debounce_and_no_autorun ... ok
+test relations::tests::attach_is_idempotent_per_target ... ok
+test structural::tests::ambiguous_move_is_rejected ... ok
+test structural::tests::unicode_duplicate_is_lossless ... ok
+test tests::contract_version_is_one ... ok
+test tests::lens_stack_bounds_and_syscall_gate ... ok
+test tests::overview_jump_and_escape_restore ... ok
+test timeline::tests::orders_redacts_and_labels_honestly ... ok
+test output::tests::strips_ansi_and_rejects_escape_paths ... FAILED
+test snapshot::tests::round_trip_and_opt_out ... ok
+
+failures:
+
+---- output::tests::strips_ansi_and_rejects_escape_paths stdout ----
+
+thread 'output::tests::strips_ansi_and_rejects_escape_paths' (654909) panicked at crates/ide-spatial/src/output.rs:155:9:
+assertion `left == right` failed
+  left: None
+ right: Some("src/main.rs")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    output::tests::strips_ansi_and_rejects_escape_paths
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ide-spatial --lib`

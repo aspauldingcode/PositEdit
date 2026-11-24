@@ -1,0 +1,77 @@
+{
+  "when": "2026-11-20T19:57:50-0800",
+  "root_cause_os_error_2": "ENOENT launching bare terminal-browser/phone when not on PATH; fixed via resolve_runtime_program + IDE_TERMINAL_* + ~/.local/bin shims + enriched child PATH",
+  "verification_method": "Ghostty window 2102 (pid 29678) via screencapture -l + System Events keystrokes; Computer Use / ucu cannot reliably target terminal apps",
+  "results": {
+    "browser": {
+      "ok": true,
+      "evidence": [
+        "shots/103-after-6.png",
+        "shots/107-browser-again.png"
+      ],
+      "signals": [
+        "browser-frame",
+        "https://example.com",
+        "Example Domain",
+        "browser in the editor",
+        "tab 2 browser"
+      ],
+      "enoent": false
+    },
+    "phone_ios": {
+      "ok": true,
+      "evidence": [
+        "shots/104-after-7.png"
+      ],
+      "signals": [
+        "sim udid=9B662FC3-...",
+        "iPhone 18 Pro (Booted)",
+        "phone-frame",
+        "phone in the editor"
+      ],
+      "booted_device": "iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718)",
+      "enoent": false
+    },
+    "android": {
+      "ok": true,
+      "evidence": [
+        "shots/105-after-8.png",
+        "shots/108-android-focus.png"
+      ],
+      "signals": [
+        "android_pane.py child of ide",
+        "emulator-5554",
+        "frame png 1080x2400",
+        "android in the editor"
+      ],
+      "serial": "emulator-5554",
+      "avd": "Medium_Phone_API_36.1",
+      "enoent": false
+    },
+    "notices": {
+      "os_error_2": false,
+      "evidence": [
+        "shots/106-notices.png"
+      ],
+      "status": "no notifications"
+    }
+  },
+  "dlc_plans": {
+    "browser": [
+      "/Users/8amps/.local/bin/terminal-browser",
+      "open",
+      "https://example.com"
+    ],
+    "phone": [
+      "/Users/8amps/.local/bin/terminal-phone",
+      "view",
+      "default"
+    ],
+    "android": [
+      "python3",
+      ".../android_pane.py",
+      "Medium_Phone_API_36.1"
+    ]
+  },
+  "shim_default_url": "https://example.com"
+}

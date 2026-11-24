@@ -1,0 +1,35 @@
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss_before_kib=2208 rss_after_kib=5056 delta_kib=2848
+  verdict=PASS
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss_before_kib=2208 rss_after_kib=5104 delta_kib=2896
+  verdict=PASS
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss_before_kib=2208 rss_after_kib=5088 delta_kib=2880
+  verdict=PASS
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss_before_kib=2208 rss_after_kib=5088 delta_kib=2880
+  verdict=PASS
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss_before_kib=2208 rss_after_kib=5088 delta_kib=2880
+  verdict=PASS

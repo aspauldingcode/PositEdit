@@ -1,0 +1,18 @@
+Android AVD pane (headless). Ctrl-C closes this view.
+serial=emulator-5554 avd=Medium_Phone_API_36.1
+[H[JAndroid  Medium_Phone_API_36.1  emulator-5554
+frame png 1080x2400 1373675B
+[########################################]
+----------------------------------------
+--------- beginning of main
+D/SatelliteController( 1056): getCarrierRoamingNtnConnectType: Falling back to global carrier config connect type: 0
+I/HalDevMgr(  667): bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+I/HalDevMgr(  667): bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+I/wpa_supplicant(  888): wlan0: CTRL-EVENT-BEACON-LOSS 
+I/HalDevMgr(  667): bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+W/libbinder.BackendUnifiedServiceManager( 7283): Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: SurfaceFlingerAIDL
+W/libbinder.BpBinder( 7283): Linking to death on android.gui.ISurfaceComposer but there are no threads (yet?) listening to incoming transactions. See ProcessState::startThreadPool and ProcessState::setThreadPoolMaxThreadCount. Generally you should setup the binder threadpool before other initialization steps.
+W/libbinder.ProcessState( 7283): Extra binder thread started, but 0 threads requested. Do not use *startThreadPool when zero threads are requested.
+[H[JAndroid  Medium_Phone_API_36.1  emulator-5554
+frame png 1080x2400 1373675B
+ANDROID_OK 2

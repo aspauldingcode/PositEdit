@@ -1,0 +1,2 @@
+   Compiling posit_debug_demo v0.1.0 (/private/tmp/posit-debug-demo)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s

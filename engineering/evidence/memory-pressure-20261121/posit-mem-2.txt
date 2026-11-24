@@ -1,0 +1,18 @@
+warning: method `geom_path` is never used
+   --> crates/ide-tui/src/canvas.rs:176:12
+    |
+ 65 | impl CanvasSurface {
+    | ------------------ method in this implementation
+...
+176 |     pub fn geom_path(&self) -> &Path {
+    |            ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+posit-edit memory bench
+  host_pressure=Urgent
+  undo_after_storm=64
+  undo_after_critical_trim=8
+  history_limit=8
+  rss=unavailable
+  verdict=PASS

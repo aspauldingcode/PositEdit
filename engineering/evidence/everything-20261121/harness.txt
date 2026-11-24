@@ -1,0 +1,18 @@
+test_acyclic_seed_and_idempotent_init (test_harness.GraphTests) ... ok
+test_dependency_unlock (test_harness.GraphTests) ... ok
+test_law_is_accepted (test_harness.GraphTests) ... ok
+test_only_root_ready_at_start (test_harness.GraphTests) ... ok
+test_process_log_and_exit_code (test_harness.GraphTests) ... ok
+test_process_timeout_is_not_green (test_harness.GraphTests) ... ok
+test_recursion_guard_marker_is_in_agent_prompt (test_harness.GraphTests) ... ok
+test_scrub_bearer (test_harness.GraphTests) ... ok
+test_cargo_without_rustc_uses_devshell (test_toolchain.ToolchainTests) ... ok
+test_complete_host_is_unchanged (test_toolchain.ToolchainTests) ... ok
+test_missing_bend_uses_devshell (test_toolchain.ToolchainTests) ... ok
+test_python_stays_on_path (test_toolchain.ToolchainTests) ... ok
+test_unknown_missing_tool_is_not_wrapped (test_toolchain.ToolchainTests) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.228s
+
+OK

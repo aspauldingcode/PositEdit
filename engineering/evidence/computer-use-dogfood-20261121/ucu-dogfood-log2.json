@@ -1,0 +1,528 @@
+{
+  "results": {
+    "help": {
+      "Keybinds": false,
+      "How to use Posit Edit": false,
+      "zo": false
+    },
+    "edit_mode": {
+      "EDIT": false
+    },
+    "typed": {
+      "cu-dogfood": false
+    },
+    "view": {
+      "VIEW": false
+    },
+    "browser": {
+      "Browser": false,
+      "browser": false,
+      "runtime": false,
+      "http": false,
+      "pane": false,
+      "_alive": true
+    },
+    "phone": {
+      "Phone": false,
+      "phone": false,
+      "runtime": false,
+      "iPhone": false,
+      "sim": false,
+      "_alive": true
+    },
+    "android": {
+      "Android": false,
+      "android": false,
+      "runtime": false,
+      "emulator": false,
+      "AVD": false,
+      "_alive": true
+    },
+    "debug": {
+      "Debug": false,
+      "debug": false,
+      "DAP": false,
+      "debugger": false,
+      "breakpoint": false,
+      "available": false,
+      "_alive": true
+    },
+    "spatial_overview": {
+      "overview": false,
+      "spatial": false,
+      "Overview": false,
+      "_alive": true
+    },
+    "spatial_lens": {
+      "lens": false,
+      "Lens": false,
+      "ephemeral": false,
+      "_alive": true
+    },
+    "spatial_structural": {
+      "structural": false,
+      "Structural": false,
+      "preview": false,
+      "_alive": true
+    },
+    "spatial_timeline": {
+      "timeline": false,
+      "Timeline": false,
+      "execution": false,
+      "_alive": true
+    },
+    "spatial_impact": {
+      "impact": false,
+      "Impact": false,
+      "change": false,
+      "_alive": true
+    },
+    "spatial_preview": {
+      "preview": false,
+      "Preview": false,
+      "rich": false,
+      "_alive": true
+    },
+    "term_toggle_a_alive": true,
+    "term_toggle_b_alive": true,
+    "files_toggle": {
+      "Files": false,
+      "src": false
+    },
+    "agent_toggle": {
+      "Agent": false,
+      "claude": false,
+      "ask": false
+    },
+    "notices": {
+      "notice": false,
+      "Notification": false,
+      "error": false,
+      "badge": false
+    },
+    "final_alive": true,
+    "final_has_axiom": true
+  },
+  "log": [
+    [
+      "shot",
+      "20-start",
+      true,
+      200
+    ],
+    [
+      "key",
+      "shift+/",
+      true,
+      "key shift+/"
+    ],
+    [
+      "shot",
+      "21-help",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "key",
+      "return",
+      true,
+      "key return"
+    ],
+    [
+      "shot",
+      "22-edit",
+      true,
+      200
+    ],
+    [
+      "key",
+      "cmd+v",
+      true,
+      "key cmd+v"
+    ],
+    [
+      "shot",
+      "23-typed",
+      false,
+      0
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "24-view",
+      true,
+      200
+    ],
+    [
+      "key",
+      "6",
+      true,
+      "key 6"
+    ],
+    [
+      "shot",
+      "25-browser",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "25-browser-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "7",
+      true,
+      "key 7"
+    ],
+    [
+      "shot",
+      "25-phone",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "25-phone-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "8",
+      true,
+      "key 8"
+    ],
+    [
+      "shot",
+      "25-android",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "25-android-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "9",
+      true,
+      "key 9"
+    ],
+    [
+      "shot",
+      "25-debug",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "25-debug-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "o",
+      true,
+      "key o"
+    ],
+    [
+      "shot",
+      "26-overview",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-overview-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "l",
+      true,
+      "key l"
+    ],
+    [
+      "shot",
+      "26-lens",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-lens-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "n",
+      true,
+      "key n"
+    ],
+    [
+      "shot",
+      "26-structural",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-structural-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "26-timeline",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-timeline-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "26-impact",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-impact-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "p",
+      true,
+      "key p"
+    ],
+    [
+      "shot",
+      "26-preview",
+      true,
+      200
+    ],
+    [
+      "key",
+      "escape",
+      true,
+      "key escape"
+    ],
+    [
+      "shot",
+      "26-preview-dismiss",
+      true,
+      200
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "27-term-a",
+      true,
+      200
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "27-term-b",
+      true,
+      200
+    ],
+    [
+      "key",
+      "shift+,",
+      true,
+      "key shift+,"
+    ],
+    [
+      "shot",
+      "28-files",
+      true,
+      200
+    ],
+    [
+      "key",
+      "shift+,",
+      true,
+      "key shift+,"
+    ],
+    [
+      "key",
+      "shift+.",
+      true,
+      "key shift+."
+    ],
+    [
+      "shot",
+      "29-agent",
+      true,
+      200
+    ],
+    [
+      "key",
+      "shift+.",
+      true,
+      "key shift+."
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "30-notices",
+      true,
+      200
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "31-final",
+      true,
+      200
+    ]
+  ]
+}

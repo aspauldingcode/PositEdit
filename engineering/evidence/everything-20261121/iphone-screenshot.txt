@@ -1,0 +1,5 @@
+Detected file type from extension: PNG
+Note: No display specified. Defaulting to display: 5CC09A67-3E8A-4DD3-BB83-64EB6C78322B (screenID: 1, name: LCD)
+Wrote screenshot to: /Users/8amps/PositEdit/engineering/evidence/everything-20261121/iphone-booted.png
+Permissions Size User  Date Modified Git Name
+.rw-r--r--@ 3.6M 8amps 20 Nov 18:39   -N /Users/8amps/PositEdit/engineering/evidence/everything-20261121/iphone-booted.png

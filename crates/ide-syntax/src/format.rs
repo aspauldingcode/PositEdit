@@ -23,74 +23,111 @@ pub enum FormatOutcome {
 }
 
 pub fn formatter_for(language: &str) -> Option<Formatter> {
-    Some(match language {
-        "rust" => Formatter {
+    formatters_for(language).into_iter().next()
+}
+
+/// Preferred tool first, then practical fallbacks when the preferred binary is missing.
+fn formatters_for(language: &str) -> Vec<Formatter> {
+    match language {
+        "rust" => vec![Formatter {
             program: "rustfmt",
             args: &["--edition", "2021"],
             extension: "rs",
-        },
-        "python" => Formatter {
+        }],
+        "python" => vec![Formatter {
             program: "ruff",
             args: &["format"],
             extension: "py",
-        },
-        "c" => Formatter {
+        }],
+        "c" => vec![Formatter {
             program: "clang-format",
             args: &["-i"],
             extension: "c",
-        },
-        "zig" => Formatter {
+        }],
+        "objc" | "objective-c" | "objective-cpp" | "objcpp" => vec![Formatter {
+            program: "clang-format",
+            args: &["-i", "-assume-filename=file.m"],
+            extension: "m",
+        }],
+        "zig" => vec![Formatter {
             program: "zig",
             args: &["fmt"],
             extension: "zig",
-        },
-        "nix" => Formatter {
-            program: "nixfmt",
-            args: &[],
-            extension: "nix",
-        },
-        "java" => Formatter {
-            program: "google-java-format",
-            args: &["--replace"],
-            extension: "java",
-        },
-        "kotlin" => Formatter {
+        }],
+        // Prefer official nixfmt only — do not fall back to alejandra/nixpkgs-fmt.
+        "nix" => vec![
+            Formatter {
+                program: "nixfmt",
+                args: &[],
+                extension: "nix",
+            },
+            Formatter {
+                program: "nixfmt-rfc-style",
+                args: &[],
+                extension: "nix",
+            },
+        ],
+        "java" => vec![
+            Formatter {
+                program: "google-java-format",
+                args: &["--replace"],
+                extension: "java",
+            },
+            // Widely installed; clang-format understands Java when given a .java name.
+            Formatter {
+                program: "clang-format",
+                args: &["-i", "-assume-filename=file.java"],
+                extension: "java",
+            },
+        ],
+        "kotlin" => vec![Formatter {
             program: "ktlint",
             args: &["--format"],
             extension: "kt",
-        },
-        "swift" => Formatter {
+        }],
+        "swift" => vec![Formatter {
             program: "swift-format",
             args: &["--in-place"],
             extension: "swift",
-        },
-        "javascript" => Formatter {
+        }],
+        "javascript" => vec![Formatter {
             program: "prettier",
             args: &["--write"],
             extension: "js",
-        },
-        "typescript" => Formatter {
+        }],
+        "typescript" => vec![Formatter {
             program: "prettier",
             args: &["--write"],
             extension: "ts",
-        },
-        _ => return None,
-    })
+        }],
+        _ => Vec::new(),
+    }
 }
 
 pub fn format_manually(language: &str, source: &str) -> FormatOutcome {
-    let Some(formatter) = formatter_for(language) else {
+    let formatters = formatters_for(language);
+    if formatters.is_empty() {
         return FormatOutcome::Unavailable {
             program: "none".to_string(),
         };
-    };
-    format_with(
-        formatter.program,
-        formatter.args,
-        formatter.extension,
-        source,
-        Duration::from_secs(5),
-    )
+    }
+    let timeout = Duration::from_secs(5);
+    let mut missing = Vec::new();
+    for formatter in formatters {
+        match format_with(
+            formatter.program,
+            formatter.args,
+            formatter.extension,
+            source,
+            timeout,
+        ) {
+            FormatOutcome::Unavailable { program } => missing.push(program),
+            other => return other,
+        }
+    }
+    FormatOutcome::Unavailable {
+        program: missing.join(" / "),
+    }
 }
 
 pub fn format_with(

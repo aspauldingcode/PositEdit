@@ -1,0 +1,81 @@
+warning: field `id` is never read
+  --> crates/ide-tui/src/graphics.rs:19:9
+   |
+18 | pub struct ManagedSurface {
+   |            -------------- field in this struct
+19 |     pub id: SurfaceId,
+   |         ^^
+   |
+   = note: `ManagedSurface` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ide-tui` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/ide_tui-6176e557fbf2967e)
+
+running 62 tests
+test layout::tests::aspect_picks_the_axis ... ok
+test layout::tests::landscape_columns_follow_width_and_open_files ... ok
+test layout::tests::custom_spans_move_the_seam_and_fullscreen_ignores_them ... ok
+test layout::tests::portrait_stacks_tiles_at_full_width ... ok
+test instance::tests::nested_session_env_is_rejected ... ok
+test local_tab::tests::skips_short_fragments_and_secrets ... ok
+test palette::tests::bend_laws_conformance ... ok
+test palette::tests::normalize_strips_one_colon_and_spaces ... ok
+test palette::tests::only_exact_quit_requests_exit ... ok
+test palette::tests::vim_quit_spellings_never_request_exit ... ok
+test palette::tests::vim_write_quit_spellings_never_request_exit ... ok
+test graphics::tests::probe_and_cleanup ... ok
+test local_tab::tests::completes_nearest_identifier ... ok
+test files::tests::missing_chooser_program_is_reported ... ok
+test files::tests::tree_lists_a_file_and_skips_target ... ok
+test instance::tests::second_acquire_is_rejected ... ok
+test terminal::tests::side_seam_resizes_and_stays_visible ... ok
+test terminal::tests::grid_prints_and_scrolls ... ok
+test terminal::tests::sgr_keeps_background_and_truecolor_for_fastfetch ... ok
+test files::tests::chooser_script_returns_paths_and_creates_a_new_file ... ok
+test layout::tests::open_terminal_is_the_bottom_quarter ... ok
+test terminal::tests::body_pointer_selects_and_yanks_like_a_buffer ... ok
+test terminal::tests::exit_closes_the_session ... ok
+test tests::file_tree_opens_a_workspace_file_and_save_writes_it ... ok
+test tests::click_past_the_line_puts_the_cursor_on_the_last_character ... ok
+test tests::fullscreen_is_default_when_opening_another_file ... ok
+test tests::focus_scrolls_sideways_when_wide_and_down_when_tall ... ok
+test tests::bend_and_markdown_use_keyword_color ... ok
+test tests::hover_hint_appears_after_one_second ... ok
+test tests::discrete_scroll_clamps_at_edges ... ok
+test tests::keywords_and_strings_use_different_colors ... ok
+test tests::fuzzy_find_grep_and_tree_search_highlight_matches ... ok
+test tests::local_tab_accepts_only_the_current_revision ... ok
+test tests::runtime_pane_focuses_instead_of_duplicating ... ok
+test tests::keybinds_are_alphabetical_and_cc_toggles_chat ... ok
+test tests::new_buffer_and_yazi_paths_become_editable_files ... ok
+test tests::spatial_minimap_hides_on_narrow_tile ... ok
+test tests::one_file_expands_and_full_columns_cap_at_eighty ... ok
+test terminal::tests::browser_phone_android_live_inside_terminal_buffer ... ok
+test tests::mouse_click_drag_and_scroll_edit_the_buffer ... ok
+test tests::spatial_structural_and_timeline_modes ... ok
+test tests::spatial_overview_jump_and_escape_restore_focus ... ok
+test tests::sidebars_resize_wrap_and_keep_nested_names ... ok
+test tests::spatial_tab_control_stays_bottom_right ... ok
+test tests::split_palette_and_header_render ... ok
+test tests::terminal_body_drag_selects_instead_of_resizing ... ok
+test tests::selection_is_obvious_for_keyboard_and_clicks ... ok
+test tests::terminal_panel_is_quarter_the_screen_and_multiplexes ... ok
+test tests::toolbar_hover_uses_cyan ... ok
+test tests::tile_edge_drag_widens_a_clipped_line_and_fullscreen_does_not ... ok
+test tests::notification_yank_and_menu_stacking ... ok
+test tests::tree_wheel_scrolls_the_sidebar_only ... ok
+test tests::typing_is_undoable_at_the_cursor ... ok
+test tests::wheel_locks_to_one_axis ... ok
+test tests::yazi_browse_is_a_centered_float ... ok
+test tests::unsaved_buffers_ask_before_close_and_quit ... ok
+test tests::typing_does_not_format_and_format_is_a_command ... ok
+test tests::view_mode_commands_reorder_buffers_and_click_chrome ... ok
+test tests::workbench_previews_a_cargo_plan_without_running_it ... ok
+test tests::toolbar_runtimes_plan_without_configuration ... ok
+test tests::title_q_quits_and_w_closes_the_buffer ... ok
+test tests::help_button_is_visible_and_opens_the_guide ... ok
+
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.72s
+

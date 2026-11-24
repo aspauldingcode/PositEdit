@@ -1,13 +1,19 @@
 # Posit Edit
 
+<p align="center">
+  <img src="assets/icons/posit-edit.png" alt="Posit Edit" width="160" />
+</p>
+
 Posit Edit is a terminal IDE, sometimes called the Posit IDE. The name comes from the posit number format, which is more accurate and more efficient than floating point.
 
-Run it with `posit-edit` or the short command `pst`. `pos` is intentionally unused.
+Run it with the **CLI** (`posit-edit` / `pst`), or on macOS via the **wrapper app** (neovim-style) that opens your terminal and launches the CLI. `pos` is intentionally unused.
 
 ```sh
 posit-edit [file]
 pst [file]
 ```
+
+**Icons:** macOS ships a Liquid Glass Icon Composer package (`assets/icons/PositEdit.icon`) built from the PE silhouette; Linux uses the brushed-metal mark (`assets/icons/posit-edit-metal-linux.png` / FreeDesktop hicolor). Build the wrapper with `sh ./scripts/build-macos-wrapper.sh`.
 
 **Status: executable starter harness and IDE scaffold, NOT an already-complete IDE.**
 
@@ -33,6 +39,8 @@ For direct one-shot use *inside Cursor*, copy `ONE_SHOT_PROMPT.md` into the agen
 sh ./bootstrap.sh --check                # inventory tools, no mutation beyond report
 sh ./bootstrap.sh --setup                # graph, project MCP, cargo locks if available
 sh ./bootstrap.sh --run                  # setup and agent loop
+cargo build -p ide                       # CLI: target/debug/posit-edit (+ pst via nix/flake)
+sh ./scripts/build-macos-wrapper.sh      # macOS neovim-style PositEdit.app (Liquid Glass icon)
 python3 scripts/harness.py status     # graph status
 python3 scripts/harness.py next       # next unblocked task
 python3 scripts/harness.py run --max-tasks 6

@@ -2,12 +2,21 @@
 //! Edits commit only after every range is valid. Offsets convert between
 //! Unicode scalars, UTF-8 bytes, UTF-16 code units, and grapheme clusters.
 //! Save renames a temp file in the destination directory and will not replace a symlink.
+mod bench;
+mod memory;
 mod persist;
 mod position;
 
 use ropey::Rope;
 use std::{error::Error, fmt};
 
+pub use bench::{
+    duration_ns, time_iters, time_once, SampleStats, DEFAULT_SAMPLES, DEFAULT_WARMUP,
+};
+pub use memory::{
+    pressure_level, process_rss_bytes, PressureLevel, HISTORY_HARD_MAX, HISTORY_NORMAL,
+    HISTORY_PRESSURE,
+};
 pub use persist::{Newline, SaveError};
 pub use position::{OffsetUnit, PositionError};
 
@@ -62,6 +71,10 @@ pub struct Document {
     undo: Vec<Rope>,
     redo: Vec<Rope>,
     newline: Newline,
+    /// Dynamic undo/redo cap (tightens under OS memory pressure).
+    history_limit: usize,
+    /// End caret of an in-progress single-char typing run (undo coalescing).
+    typing_coalesce_end: Option<usize>,
 }
 
 impl Document {
@@ -72,6 +85,8 @@ impl Document {
             undo: Vec::new(),
             redo: Vec::new(),
             newline: Newline::Lf,
+            history_limit: HISTORY_NORMAL.min(HISTORY_HARD_MAX),
+            typing_coalesce_end: None,
         }
     }
 
@@ -85,6 +100,56 @@ impl Document {
     pub fn len_chars(&self) -> usize {
         self.text.len_chars()
     }
+    /// Rope line count (trailing newline yields an empty final line).
+    pub fn len_lines(&self) -> usize {
+        self.text.len_lines().max(1)
+    }
+    /// Line index containing `char_idx` (clamped).
+    pub fn char_to_line(&self, char_idx: usize) -> usize {
+        let len = self.text.len_chars();
+        if len == 0 {
+            return 0;
+        }
+        let idx = char_idx.min(len.saturating_sub(1));
+        self.text.char_to_line(idx)
+    }
+    /// First character index of `line` (clamped).
+    pub fn line_to_char(&self, line: usize) -> usize {
+        let lines = self.text.len_lines();
+        if lines == 0 {
+            return 0;
+        }
+        self.text.line_to_char(line.min(lines.saturating_sub(1)))
+    }
+
+    /// First `max_chars` scalars of `line` (0-based), without the trailing newline.
+    ///
+    /// Used by the editor minimap to sample a sliding window without materializing
+    /// the whole document string.
+    pub fn line_prefix(&self, line: usize, max_chars: usize) -> String {
+        if max_chars == 0 || self.text.len_chars() == 0 {
+            return String::new();
+        }
+        let lines = self.text.len_lines();
+        if line >= lines {
+            return String::new();
+        }
+        let slice = self.text.line(line);
+        let mut out = String::with_capacity(max_chars.min(64));
+        let mut n = 0usize;
+        for ch in slice.chars() {
+            if ch == '\n' || ch == '\r' {
+                break;
+            }
+            out.push(ch);
+            n += 1;
+            if n >= max_chars {
+                break;
+            }
+        }
+        out
+    }
+
     pub fn to_text(&self) -> String {
         self.text.to_string()
     }
@@ -92,8 +157,51 @@ impl Document {
         self.text.len_chars() == 0
     }
 
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
+
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
+    }
+
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
+    }
+
+    /// Apply the host memory-pressure budget and drop excess snapshots.
+    pub fn apply_pressure(&mut self, level: PressureLevel) {
+        self.set_history_limit(level.history_limit());
+    }
+
+    pub fn set_history_limit(&mut self, limit: usize) {
+        self.history_limit = limit.clamp(1, HISTORY_HARD_MAX);
+        self.trim_history();
+    }
+
+    fn trim_history(&mut self) {
+        let limit = self.history_limit;
+        if self.undo.len() > limit {
+            let drop = self.undo.len() - limit;
+            self.undo.drain(0..drop);
+        }
+        if self.redo.len() > limit {
+            let drop = self.redo.len() - limit;
+            self.redo.drain(0..drop);
+        }
+    }
+
+    /// Drop redo entirely and keep only the newest `keep` undo snapshots.
+    pub fn compact(&mut self, keep: usize) {
+        self.redo.clear();
+        self.set_history_limit(keep.max(1));
+    }
+
     /// Edits are in document coordinates before the transaction.
     /// Validate all operations before making *any* changes.
+    ///
+    /// Consecutive single-character inserts at the advancing caret coalesce into
+    /// one undo snapshot (typing a word is one Undo, not N rope clones).
     pub fn apply(&mut self, expected_revision: u64, edits: &[Edit]) -> Result<u64, EditError> {
         if self.revision != expected_revision {
             return Err(EditError::StaleRevision {
@@ -104,6 +212,36 @@ impl Document {
         if edits.is_empty() {
             return Ok(self.revision);
         }
+        // Fast path: single caret insert (dominant typing path).
+        if edits.len() == 1 {
+            let e = &edits[0];
+            if e.start > e.end || e.end > self.text.len_chars() {
+                return Err(EditError::InvalidRange);
+            }
+            let single_insert =
+                e.start == e.end && e.replacement.chars().count() == 1;
+            if single_insert && self.typing_coalesce_end == Some(e.start) {
+                self.text.insert(e.start, &e.replacement);
+                self.typing_coalesce_end = Some(e.start + 1);
+                self.redo.clear();
+                self.revision += 1;
+                return Ok(self.revision);
+            }
+            let prior = self.text.clone();
+            self.text.remove(e.start..e.end);
+            self.text.insert(e.start, &e.replacement);
+            self.undo.push(prior);
+            self.redo.clear();
+            self.trim_history();
+            self.typing_coalesce_end = if single_insert {
+                Some(e.start + 1)
+            } else {
+                None
+            };
+            self.revision += 1;
+            return Ok(self.revision);
+        }
+
         let mut sorted: Vec<&Edit> = edits.iter().collect();
         sorted.sort_by_key(|e| (e.start, e.end));
         let mut prev_end = 0;
@@ -120,6 +258,7 @@ impl Document {
             }
             prev_end = e.end;
         }
+
         // A clone is an independent rope snapshot for undo, not a full string copy.
         let prior = self.text.clone();
         for e in sorted.into_iter().rev() {
@@ -128,6 +267,8 @@ impl Document {
         }
         self.undo.push(prior);
         self.redo.clear();
+        self.trim_history();
+        self.typing_coalesce_end = None;
         self.revision += 1;
         Ok(self.revision)
     }
@@ -135,6 +276,8 @@ impl Document {
     pub fn undo(&mut self) -> bool {
         if let Some(before) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.text, before));
+            self.typing_coalesce_end = None;
+            self.trim_history();
             self.revision += 1;
             true
         } else {
@@ -145,6 +288,8 @@ impl Document {
     pub fn redo(&mut self) -> bool {
         if let Some(after) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.text, after));
+            self.typing_coalesce_end = None;
+            self.trim_history();
             self.revision += 1;
             true
         } else {
@@ -253,6 +398,81 @@ fn map_point(pos: usize, edits: &[Edit]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn line_prefix_culls_without_full_text() {
+        let d = Document::new("alpha\nbeta-gamma\n");
+        assert_eq!(d.line_prefix(0, 3), "alp");
+        assert_eq!(d.line_prefix(1, 4), "beta");
+        assert_eq!(d.line_prefix(1, 64), "beta-gamma");
+        assert_eq!(d.line_prefix(99, 8), "");
+    }
+
+    /// Conformance for `bend/doc/LAWS.bend` (decide_fresh_bumps / apply_stale_*).
+    #[test]
+    fn bend_doc_laws_conformance() {
+        // apply_zero_fresh / decide_fresh_bumps: matching rev → Ok, rev+1
+        let mut d = Document::new("x");
+        assert_eq!(d.revision(), 0);
+        assert_eq!(
+            d.apply(
+                0,
+                &[Edit {
+                    start: 1,
+                    end: 1,
+                    replacement: "y".into(),
+                }]
+            ),
+            Ok(1)
+        );
+        assert_eq!(d.revision(), 1);
+        assert_eq!(d.to_text(), "xy");
+
+        // apply_stale_keeps_rev / decide_stale_preserves
+        let before = d.to_text();
+        let rev = d.revision();
+        assert!(matches!(
+            d.apply(
+                0,
+                &[Edit {
+                    start: 0,
+                    end: 1,
+                    replacement: "Z".into(),
+                }]
+            ),
+            Err(EditError::StaleRevision { .. })
+        ));
+        assert_eq!(d.revision(), rev);
+        assert_eq!(d.to_text(), before);
+
+        // apply_fresh_revision_is_succ (concrete 7→8 path via successive applies)
+        let mut e = Document::new("");
+        for expected in 0u64..7 {
+            assert_eq!(
+                e.apply(
+                    expected,
+                    &[Edit {
+                        start: e.len_chars(),
+                        end: e.len_chars(),
+                        replacement: ".".into(),
+                    }]
+                ),
+                Ok(expected + 1)
+            );
+        }
+        assert_eq!(e.revision(), 7);
+        assert_eq!(
+            e.apply(
+                7,
+                &[Edit {
+                    start: e.len_chars(),
+                    end: e.len_chars(),
+                    replacement: "!".into(),
+                }]
+            ),
+            Ok(8)
+        );
+    }
+
     #[test]
     fn atomic_edit_and_undo() {
         let mut d = Document::new("A🦀C");
@@ -395,5 +615,78 @@ mod tests {
         d.apply_unit(0, 0, 1, OffsetUnit::Grapheme, "").unwrap();
         assert_eq!(d.to_text(), "🦀");
         assert_eq!(d.revision(), 1);
+    }
+
+    #[test]
+    fn undo_history_stays_bounded_under_edit_storm() {
+        let payload = "x".repeat(8_192);
+        let mut d = Document::new(&payload);
+        for _ in 0..2_000 {
+            let rev = d.revision();
+            d.apply(
+                rev,
+                &[Edit {
+                    start: 0,
+                    end: 0,
+                    replacement: "a".into(),
+                }],
+            )
+            .unwrap();
+        }
+        assert!(
+            d.undo_len() <= HISTORY_HARD_MAX,
+            "undo grew without bound: {}",
+            d.undo_len()
+        );
+        assert!(
+            d.undo_len() <= HISTORY_NORMAL,
+            "undo exceeded normal cap: {}",
+            d.undo_len()
+        );
+        // Newest edits must remain undoable.
+        assert!(d.undo());
+        assert!(d.to_text().starts_with('a') || d.to_text().starts_with('x'));
+    }
+
+    #[test]
+    fn typing_run_coalesces_into_one_undo() {
+        let mut d = Document::new("");
+        for (i, ch) in "hello".chars().enumerate() {
+            let rev = d.revision();
+            d.apply(
+                rev,
+                &[Edit {
+                    start: i,
+                    end: i,
+                    replacement: ch.to_string(),
+                }],
+            )
+            .unwrap();
+        }
+        assert_eq!(d.to_text(), "hello");
+        assert_eq!(d.undo_len(), 1, "typing should be one undo snapshot");
+        assert!(d.undo());
+        assert_eq!(d.to_text(), "");
+    }
+
+    #[test]
+    fn pressure_compacts_history_aggressively() {
+        let mut d = Document::new("seed");
+        for _ in 0..80 {
+            let rev = d.revision();
+            d.apply(
+                rev,
+                &[Edit {
+                    start: 0,
+                    end: 0,
+                    replacement: ".".into(),
+                }],
+            )
+            .unwrap();
+        }
+        assert_eq!(d.undo_len(), HISTORY_NORMAL);
+        d.apply_pressure(PressureLevel::Critical);
+        assert!(d.undo_len() <= HISTORY_PRESSURE);
+        assert_eq!(d.redo_len(), 0);
     }
 }

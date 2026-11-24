@@ -1,0 +1,6 @@
+    Checking ide-protocol v0.1.0 (/Users/8amps/PositEdit/crates/ide-protocol)
+    Checking ide-syntax v0.1.0 (/Users/8amps/PositEdit/crates/ide-syntax)
+    Checking ide-core v0.1.0 (/Users/8amps/PositEdit/crates/ide-core)
+    Checking ide-dap v0.1.0 (/Users/8amps/PositEdit/crates/ide-dap)
+    Checking ide-spatial v0.1.0 (/Users/8amps/PositEdit/crates/ide-spatial)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.05s

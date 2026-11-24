@@ -1,0 +1,4 @@
+Project-scoped config: /Users/8amps/PositEdit/.cursor/mcp.json
+Enabled: project-filesystem, project-git, posit-edit
+Note: installed MCP packages and tool permissions must still be verified at runtime.
+Launch Posit Edit first so posit_* tools can reach the control socket.

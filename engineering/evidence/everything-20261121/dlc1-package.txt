@@ -1,0 +1,22 @@
+test_dlc (unittest.loader._FailedTest) ... ERROR
+
+======================================================================
+ERROR: test_dlc (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_dlc
+Traceback (most recent call last):
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/8amps/PositEdit/.dlc-staging/20261120T1503-universal-ide-dlc/universal-ide-dlc/tests/test_dlc.py", line 10, in <module>
+    from project_dlc.core import detect, inspect, plan, CapabilityError, Project
+  File "/Users/8amps/PositEdit/.dlc-staging/20261120T1503-universal-ide-dlc/universal-ide-dlc/project_dlc/core.py", line 13, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

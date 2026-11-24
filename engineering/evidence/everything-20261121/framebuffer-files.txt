@@ -1,0 +1,2 @@
+/Users/8amps/PositEdit/engineering/evidence/everything-20261121/android-booted.png: PNG image data, 1080 x 2400, 8-bit/color RGBA, non-interlaced
+/Users/8amps/PositEdit/engineering/evidence/everything-20261121/iphone-booted.png:  PNG image data, 1206 x 2622, 8-bit/color RGBA, non-interlaced

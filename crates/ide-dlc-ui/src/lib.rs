@@ -93,7 +93,7 @@ pub struct WorkbenchToolbar {
 }
 
 impl WorkbenchToolbar {
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, hover: Option<WorkbenchAction>) {
         self.hits = toolbar_layout(area);
         for (cell, action) in &self.hits {
             let label = BUTTONS
@@ -101,14 +101,20 @@ impl WorkbenchToolbar {
                 .find(|(_, button)| button == action)
                 .map(|(label, _)| *label)
                 .unwrap_or(" ");
+            let style = if hover == Some(*action) {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            };
             frame.render_widget(
                 Paragraph::new(label)
                     .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-                    .style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    .style(style),
                 *cell,
             );
         }

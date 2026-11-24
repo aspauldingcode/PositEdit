@@ -1,0 +1,35 @@
+Vendored terminal-browser + terminal-phone integration
+======================================================
+When: 2026-11-20
+
+What changed
+------------
+1. Forked upstream MIT sources into the repo:
+   - vendor/terminal-browser  (zenbu-labs/terminal-browser)
+   - vendor/terminal-phone    (govijr/terminal-phone)
+2. Installed real Darwin arm64 binaries under vendor/dist via
+   scripts/install-runtime-vendors.sh (browser v0.15.9 Electron;
+   phone 0.4.0 + patched rebuild).
+3. vendor/bin/{terminal-browser,terminal-phone} are the IDE/DLC defaults.
+4. Evidence text-shims are no longer used (~/.local wrappers exec vendor/bin).
+5. Host launch_runtime opens browser/phone on /dev/tty with --split down so
+   Ghostty can render Kitty graphics (nested IDE PTYs cannot).
+6. Phone fork patched for Xcode 26/27 device-type plists (display scale
+   fallback) and rebuilt into vendor/dist.
+
+Live verification
+-----------------
+- Browser (key 6): real Chromium "Example Domain" in Ghostty window title /
+  pane. Notice: "browser opened in a Ghostty/kitty split".
+  Evidence: shots/111-ghostty-win-2212.png, shots/114-after-phone.png
+- Phone: patched CLI screenshot of booted posit16 (iPhone 16 Pro) succeeds
+  with scale=3, 1206x2622 native. Evidence: shots/122-phone-screenshot.png,
+  shots/123-phone-framed.png
+- Android: android_pane.py still drives emulator-5554; Darwin boots with
+  window (not -no-window) for new AVDs.
+
+Commands
+--------
+  sh scripts/install-runtime-vendors.sh
+  sh scripts/posit-launch-ide.sh
+  # In IDE: 6=browser 7=phone 8=android

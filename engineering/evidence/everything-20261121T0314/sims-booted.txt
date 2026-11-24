@@ -1,0 +1,15 @@
+== Devices ==
+-- iOS 15.0 --
+-- iOS 16.0 --
+-- iOS 17.0 --
+-- iOS 18.0 --
+-- iOS 26.5 --
+-- iOS 27.2 --
+    iPhone 18 Pro (9B662FC3-4B78-4561-8200-8CC75EC91718) (Booted) 
+-- iOS 27.2 --
+-- tvOS 26.5 --
+-- tvOS 27.2 --
+-- watchOS 26.5 --
+-- watchOS 27.2 --
+-- visionOS 26.5 --
+-- visionOS 27.2 --

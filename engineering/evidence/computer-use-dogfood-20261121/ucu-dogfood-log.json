@@ -1,0 +1,407 @@
+{
+  "results": {
+    "help": {
+      "Keybinds": false,
+      "How to use": false,
+      "spatial": false
+    },
+    "edit_mode": {
+      "EDIT": true,
+      "edit": true
+    },
+    "typed": {
+      "dogfood": true
+    },
+    "view_after_edit": {
+      "VIEW": false
+    },
+    "browser": {
+      "text_snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "phone": {
+      "text_snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "android": {
+      "text_snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "debug": {
+      "text_snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "spatial_overview": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276f // dogfood"
+    },
+    "spatial_lens": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "spatial_structural": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "spatial_timeline": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood"
+    },
+    "spatial_impact": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276f // dogfood"
+    },
+    "spatial_preview": {
+      "snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276e // dogfood\n\n\n// dogfood"
+    },
+    "terminal_toggle": true,
+    "final_snip": "PositEdit on \ue0a0 main [!?] \u276e \nPositEdit on \ue0a0 main [!?] \u276f // dogfood\n\n\ni// dogfood "
+  },
+  "log": [
+    [
+      "key",
+      "?",
+      false,
+      "unknown key \"?\""
+    ],
+    [
+      "shot",
+      "01-help",
+      true,
+      "01-help.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "Return",
+      true,
+      "key Return"
+    ],
+    [
+      "shot",
+      "02-edit-mode",
+      true,
+      "02-edit-mode.jpg"
+    ],
+    [
+      "key",
+      "cmd+v",
+      true,
+      "key cmd+v"
+    ],
+    [
+      "shot",
+      "03-after-type",
+      true,
+      "03-after-type.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "shot",
+      "04-view-mode",
+      true,
+      "04-view-mode.jpg"
+    ],
+    [
+      "key",
+      "6",
+      true,
+      "key 6"
+    ],
+    [
+      "shot",
+      "05-browser",
+      true,
+      "05-browser.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "7",
+      true,
+      "key 7"
+    ],
+    [
+      "shot",
+      "05-phone",
+      true,
+      "05-phone.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "8",
+      true,
+      "key 8"
+    ],
+    [
+      "shot",
+      "05-android",
+      true,
+      "05-android.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "9",
+      true,
+      "key 9"
+    ],
+    [
+      "shot",
+      "05-debug",
+      true,
+      "05-debug.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "o",
+      true,
+      "key o"
+    ],
+    [
+      "shot",
+      "06-spatial-overview",
+      true,
+      "06-spatial-overview.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "l",
+      true,
+      "key l"
+    ],
+    [
+      "shot",
+      "06-spatial-lens",
+      true,
+      "06-spatial-lens.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "n",
+      true,
+      "key n"
+    ],
+    [
+      "shot",
+      "06-spatial-structural",
+      true,
+      "06-spatial-structural.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "06-spatial-timeline",
+      true,
+      "06-spatial-timeline.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "06-spatial-impact",
+      true,
+      "06-spatial-impact.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "z",
+      true,
+      "key z"
+    ],
+    [
+      "key",
+      "p",
+      true,
+      "key p"
+    ],
+    [
+      "shot",
+      "06-spatial-preview",
+      true,
+      "06-spatial-preview.jpg"
+    ],
+    [
+      "key",
+      "Escape",
+      true,
+      "key Escape"
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "07-terminal-toggle-a",
+      true,
+      "07-terminal-toggle-a.jpg"
+    ],
+    [
+      "key",
+      "t",
+      true,
+      "key t"
+    ],
+    [
+      "shot",
+      "07-terminal-toggle-b",
+      true,
+      "07-terminal-toggle-b.jpg"
+    ],
+    [
+      "key",
+      "<",
+      false,
+      "unknown key \"<\""
+    ],
+    [
+      "shot",
+      "08-files-toggle",
+      true,
+      "08-files-toggle.jpg"
+    ],
+    [
+      "key",
+      "<",
+      false,
+      "unknown key \"<\""
+    ],
+    [
+      "key",
+      ">",
+      false,
+      "unknown key \">\""
+    ],
+    [
+      "shot",
+      "09-agent-toggle",
+      true,
+      "09-agent-toggle.jpg"
+    ],
+    [
+      "key",
+      ">",
+      false,
+      "unknown key \">\""
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "10-notices",
+      true,
+      "10-notices.jpg"
+    ],
+    [
+      "key",
+      "i",
+      true,
+      "key i"
+    ],
+    [
+      "shot",
+      "99-final",
+      true,
+      "99-final.jpg"
+    ]
+  ]
+}

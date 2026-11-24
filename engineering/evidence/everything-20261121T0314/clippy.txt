@@ -1,0 +1,11 @@
+    Checking ide-core v0.1.0 (/Users/8amps/PositEdit/crates/ide-core)
+    Checking ide-local-tab-ui v0.1.0 (/Users/8amps/PositEdit/crates/ide-local-tab-ui)
+    Checking ide-dlc-ui v0.1.0 (/Users/8amps/PositEdit/crates/ide-dlc-ui)
+    Checking ide-navigation v0.1.0 (/Users/8amps/PositEdit/crates/ide-navigation)
+    Checking ide-protocol v0.1.0 (/Users/8amps/PositEdit/crates/ide-protocol)
+    Checking ide-syntax v0.1.0 (/Users/8amps/PositEdit/crates/ide-syntax)
+    Checking ide-dap v0.1.0 (/Users/8amps/PositEdit/crates/ide-dap)
+    Checking ide-ai v0.1.0 (/Users/8amps/PositEdit/crates/ide-ai)
+    Checking ide-spatial v0.1.0 (/Users/8amps/PositEdit/crates/ide-spatial)
+    Checking ide-tui v0.1.0 (/Users/8amps/PositEdit/crates/ide-tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.11s

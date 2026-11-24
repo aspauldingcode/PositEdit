@@ -1,10 +1,19 @@
 //! Language detection, tree-sitter highlighting, and manual formatting.
 //! Formatters run only when `format_manually` is called.
+//!
+//! Optional nixpkgs `tree-sitter-grammars.withPlugins (_: allGrammars)` farms
+//! are loaded from `POSIT_TREE_SITTER_GRAMMARS` (see `dynamic`).
+mod dynamic;
 mod extra;
+mod fold;
 mod format;
 mod highlight;
+mod snippets;
 
+pub use fold::{fold_ranges, FoldRange};
 pub use format::{format_manually, format_with, formatter_for, FormatOutcome, Formatter};
+pub use highlight::{node_at_byte, NodeRange};
+pub use snippets::{expand as expand_snippet, match_trigger, snippets_for, Snippet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +46,16 @@ pub enum TokenKind {
     String,
     Type,
     Function,
+    /// Markdown / rich-text headings (`# Title`).
+    Heading,
+    /// Markdown strong emphasis (`**bold**`).
+    Bold,
+    /// Markdown emphasis (`*italic*` / `_italic_`).
+    Italic,
+    /// Markup delimiters (`**`, `#`, `|`, …) — dimmed in the buffer.
+    Markup,
+    /// Markdown table row cells.
+    Table,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +128,13 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
     if let Some(path) = path {
         if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
             let ext = ext.to_ascii_lowercase();
+            // .h is shared by C and ObjC; prefer ObjC when the buffer looks like it.
+            if ext == "h"
+                && looks_like_objc(text)
+                && profiles.iter().any(|profile| profile.id == "objc")
+            {
+                return "objc".to_string();
+            }
             if let Some(profile) = profiles
                 .iter()
                 .find(|profile| profile.extensions.iter().any(|item| item == &ext))
@@ -119,6 +145,20 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
         if let Some(language) = extra::language_for_path(path) {
             return language.to_string();
         }
+        if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+            if let Some(language) = dynamic::language_for_extension(&ext.to_ascii_lowercase()) {
+                return language.to_string();
+            }
+        }
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            let lower = name.to_ascii_lowercase();
+            if lower == "dockerfile" {
+                return "dockerfile".to_string();
+            }
+            if lower == "makefile" || lower == "gnumakefile" {
+                return "make".to_string();
+            }
+        }
     }
     if let Some(language) = shebang_language(text) {
         return language;
@@ -126,7 +166,19 @@ pub fn detect(profiles: &[LanguageProfile], path: Option<&Path>, text: &str) -> 
     if text.contains("fn main") && text.contains("let ") {
         return "rust".to_string();
     }
+    if looks_like_objc(text) {
+        return "objc".to_string();
+    }
     "plain".to_string()
+}
+
+fn looks_like_objc(text: &str) -> bool {
+    text.contains("@interface")
+        || text.contains("@implementation")
+        || text.contains("@protocol")
+        || text.contains("#import")
+        || text.contains("@property")
+        || text.contains("@end")
 }
 
 fn shebang_language(text: &str) -> Option<String> {
@@ -247,6 +299,10 @@ mod tests {
             ("swift", "func shown() -> Int { return 1 }\n"),
             ("zig", "pub fn shown() void {}\n"),
             ("nix", "let answer = 1; in answer\n"),
+            (
+                "objc",
+                "@interface Shown : NSObject\n@property (nonatomic) NSString *name;\n- (void)shown;\n@end\n",
+            ),
         ];
         for (language, source) in samples {
             let spans = highlight(language, source);
@@ -255,6 +311,47 @@ mod tests {
                 "{language} produced no keyword span: {spans:?}"
             );
         }
+    }
+
+    #[test]
+    fn objc_m_and_mm_and_objc_headers_are_detected() {
+        let profiles = profiles();
+        assert!(profiles.iter().any(|profile| profile.id == "objc"));
+        assert_eq!(
+            detect(&profiles, Some(Path::new("App.m")), "@implementation App\n@end\n"),
+            "objc"
+        );
+        assert_eq!(
+            detect(
+                &profiles,
+                Some(Path::new("App.mm")),
+                "#import <Foundation/Foundation.h>\n@interface App : NSObject\n@end\n"
+            ),
+            "objc"
+        );
+        assert_eq!(
+            detect(
+                &profiles,
+                Some(Path::new("App.h")),
+                "#import <Foundation/Foundation.h>\n@interface App : NSObject\n@end\n"
+            ),
+            "objc"
+        );
+        assert_eq!(
+            detect(&profiles, Some(Path::new("plain.h")), "int answer(void);\n"),
+            "c"
+        );
+        let source = "@interface App : NSObject\n- (NSString *)name;\n@end\n";
+        let spans = highlight("objc", source);
+        assert_eq!(
+            highlight::covers(source, &spans, "@interface"),
+            Some(TokenKind::Keyword),
+            "expected @interface keyword, spans={spans:?}"
+        );
+        assert!(
+            spans.iter().any(|span| span.kind == TokenKind::Type),
+            "expected a type span in objc sample: {spans:?}"
+        );
     }
 
     #[test]
@@ -277,11 +374,31 @@ mod tests {
         let spans = highlight("markdown", markdown);
         assert_eq!(
             highlight::covers(markdown, &spans, "#"),
-            Some(TokenKind::Keyword)
+            Some(TokenKind::Markup)
+        );
+        assert_eq!(
+            highlight::covers(markdown, &spans, "Title"),
+            Some(TokenKind::Heading)
         );
         assert_eq!(
             highlight::covers(markdown, &spans, "code"),
             Some(TokenKind::String)
+        );
+        let rich = "# Welcome\n\n**bold** and *italic*\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
+        let rich_spans = highlight("markdown", rich);
+        assert_eq!(
+            highlight::covers(rich, &rich_spans, "bold"),
+            Some(TokenKind::Bold)
+        );
+        assert_eq!(
+            highlight::covers(rich, &rich_spans, "italic"),
+            Some(TokenKind::Italic)
+        );
+        assert!(
+            rich_spans
+                .iter()
+                .any(|span| span.kind == TokenKind::Table),
+            "expected table cell spans: {rich_spans:?}"
         );
         let shell = "set -eu\n# note\n";
         let spans = highlight("shell", shell);
@@ -353,7 +470,9 @@ mod tests {
     #[test]
     fn formatters_match_shipped_profiles_and_do_not_run_themselves() {
         for profile in profiles() {
-            let declared = profile.formatter.expect(&profile.id);
+            let Some(declared) = profile.formatter.as_deref() else {
+                continue;
+            };
             let tool = formatter_for(&profile.id).unwrap_or_else(|| panic!("{}", profile.id));
             assert!(
                 declared.split_whitespace().next() == Some(tool.program),
@@ -364,6 +483,47 @@ mod tests {
         match format_manually("plain", "fn main(){let x=1;}") {
             FormatOutcome::Unavailable { program } => assert_eq!(program, "none"),
             other => panic!("plain text was formatted: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn java_format_falls_back_when_google_java_format_missing() {
+        let source = "class A{int x;}\n";
+        match format_manually("java", source) {
+            FormatOutcome::Applied(text) => {
+                assert!(text.contains("class A"), "{text}");
+                assert!(text.contains('\n') || text.contains(' '), "{text}");
+                assert_ne!(text, source);
+            }
+            FormatOutcome::Unchanged => {}
+            FormatOutcome::Unavailable { program } => {
+                // Neither preferred nor clang-format fallback is installed.
+                assert!(
+                    program.contains("google-java-format"),
+                    "{program}"
+                );
+            }
+            FormatOutcome::Failed { detail, .. } => panic!("java format failed: {detail}"),
+        }
+    }
+
+    #[test]
+    fn nix_format_uses_nixfmt_only() {
+        let source = "{ a=1; }\n";
+        match format_manually("nix", source) {
+            FormatOutcome::Applied(text) => {
+                assert!(text.contains('a'), "{text}");
+                assert_ne!(text, source);
+            }
+            FormatOutcome::Unchanged => {}
+            FormatOutcome::Unavailable { program } => {
+                assert!(program.contains("nixfmt"), "{program}");
+                assert!(
+                    !program.contains("alejandra") && !program.contains("nixpkgs-fmt"),
+                    "nix formatter must not fall back to alejandra/nixpkgs-fmt: {program}"
+                );
+            }
+            FormatOutcome::Failed { detail, .. } => panic!("nix format failed: {detail}"),
         }
     }
 
