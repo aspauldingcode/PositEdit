@@ -2335,25 +2335,28 @@ impl EditorApp {
 
     pub fn tick(&mut self, dt: Duration) -> bool {
         let mut changed = false;
-        let delta = self.target - self.view;
-        if delta.abs() < 0.05 {
-            if self.view != self.target {
-                self.view = self.target;
+        // AFK tick27: Flip covers tiles — skip view/wheel settle math.
+        if !self.flip.open {
+            let delta = self.target - self.view;
+            if delta.abs() < 0.05 {
+                if self.view != self.target {
+                    self.view = self.target;
+                    changed = true;
+                }
+            } else {
+                let step = 1.0 - (-dt.as_secs_f32() / 0.12).exp();
+                self.view += delta * step;
                 changed = true;
             }
-        } else {
-            let step = 1.0 - (-dt.as_secs_f32() / 0.12).exp();
-            self.view += delta * step;
-            changed = true;
-        }
-        if self
-            .wheel_at
-            .is_some_and(|at| at.elapsed() > Duration::from_millis(160))
-        {
-            self.scroll_axis = None;
-            self.wheel_at = None;
-            // One present after settle so Kitty minimap can return.
-            changed = true;
+            if self
+                .wheel_at
+                .is_some_and(|at| at.elapsed() > Duration::from_millis(160))
+            {
+                self.scroll_axis = None;
+                self.wheel_at = None;
+                // One present after settle so Kitty minimap can return.
+                changed = true;
+            }
         }
         // AFK: Flip owns the screen — skip hover-hint work until it closes.
         let hint_changed = if self.flip.open {
@@ -6751,6 +6754,11 @@ pub fn draw(frame: &mut Frame, app: &EditorApp) {
     // Full-screen Help replaces the entire terminal (edocview-style doc preview).
     if app.help {
         draw_help_fullscreen(frame, app, area);
+        return;
+    }
+    // AFK tick27: Flip owns the screen — skip editor/tree/terminal ratatui work.
+    if app.flip.open {
+        paint_flip_switcher(frame, app);
         return;
     }
     let chrome = app.frame_chrome(area);
@@ -11478,6 +11486,9 @@ mod tests {
         app.hover_hint = None;
         assert!(!app.tick(Duration::from_millis(16)));
         assert!(app.hover_hint.is_none());
+        // View easing under Flip must not dirty either (tick27).
+        app.target = app.view + 10.0;
+        assert!(!app.tick(Duration::from_millis(16)));
         app.flip.dirty = true;
         assert!(app.flip_animating());
         app.flip.dirty = false;
